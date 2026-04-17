@@ -21,7 +21,6 @@ import meteordevelopment.meteorclient.systems.System;
 import meteordevelopment.meteorclient.systems.Systems;
 import meteordevelopment.meteorclient.systems.config.Config;
 import meteordevelopment.meteorclient.systems.modules.combat.*;
-import meteordevelopment.meteorclient.systems.modules.combat.AntiPacketKick;
 import meteordevelopment.meteorclient.systems.modules.misc.*;
 import meteordevelopment.meteorclient.systems.modules.misc.swarm.Swarm;
 import meteordevelopment.meteorclient.systems.modules.movement.*;
@@ -319,22 +318,13 @@ public class Modules extends System<Modules> {
         synchronized (active) {
             for (Module module : getAll()) {
                 if (module.isActive() && !module.runInMainMenu) {
-                    // 只对设置了autoSubscribe的模块执行unsubscribe，避免重复取消订阅导致的异常
-                    if (module.autoSubscribe) {
-                        try {
-                            MeteorClient.EVENT_BUS.unsubscribe(module);
-                        } catch (Exception e) {
-                            // 忽略可能的取消订阅异常
-                            MeteorClient.LOG.warn("Failed to unsubscribe module '{}': {}", module.name, e.getMessage());
-                        }
-                    }
+                    MeteorClient.EVENT_BUS.unsubscribe(module);
                     module.onDeactivate();
                 }
             }
         }
     }
-
-    public void disableAll() {
+        public void disableAll() {
         synchronized (active) {
             for (Module module : getAll()) {
                 module.disable();
@@ -404,23 +394,40 @@ public class Modules extends System<Modules> {
     private void initCombat() {
         add(new TriggerBotV2());
         add(new UltimateSprint());
-        add(new AutoJumpReset());
-        add(new NoJumpDelay());
-        add(new LegitTrap());
-        add(new AntiPacketKick());
-        add(new AimAssistSilky());
+       
 
 
         add(new AntiBed());
-  
 
+        add(new AnchorAura());
+        add(new AntiAnvil());
+        add(new AntiBed());
+        add(new ArrowDodge());
+        add(new AttributeSwap());
+        add(new AutoAnvil());
+        add(new AutoArmor());
+        add(new AutoCity());
+        add(new AutoEXP());
+        add(new AutoLog());
+        add(new AutoTotem());
+        add(new AutoTrap());
+        add(new AutoWeapon());
+        add(new AutoWeb());
+        add(new BedAura());
         add(new BowAimbot());
-    
+        add(new BowSpam());
+        add(new Burrow());
         add(new Criticals());
         add(new CrystalAura());
         add(new Hitboxes());
+        add(new HoleFiller());
         add(new KillAura());
-  
+        add(new Offhand());
+        add(new Quiver());
+        add(new SelfAnvil());
+        add(new SelfTrap());
+        add(new SelfWeb());
+        add(new Surround());
     }
 
     private void initPlayer() {
@@ -432,6 +439,7 @@ public class Modules extends System<Modules> {
         add(new AutoFish());
         add(new AutoGap());
         add(new AutoMend());
+         add(new AutoReplenish());
         add(new AutoRespawn());
         add(new AutoTool());
         add(new BreakDelay());
@@ -458,7 +466,9 @@ public class Modules extends System<Modules> {
     }
 
     private void initMovement() {
+        add(new AirJump());
         add(new Anchor());
+        add(new AntiVoid());
         add(new AutoJump());
         add(new AutoWalk());
         add(new AutoWasp());
@@ -484,7 +494,6 @@ public class Modules extends System<Modules> {
         add(new Speed());
         add(new Spider());
         add(new Sprint());
-
         add(new Step());
         add(new TridentBoost());
         add(new Velocity());
@@ -563,8 +572,7 @@ public class Modules extends System<Modules> {
     }
 
     private void initMisc() {
-                add(new AntiPacketKick());
-
+        add(new AntiPacketKick());
         add(new AutoReconnect());
         add(new BetterBeacons());
         add(new BetterChat());
