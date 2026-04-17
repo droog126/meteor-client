@@ -1,75 +1,112 @@
+/*
+ * This file is part of the Meteor Client distribution (https://github.com/MeteorDevelopment/meteor-client).
+ * Copyright (c) Meteor Development.
+ */
+
 package meteordevelopment.meteorclient.systems.modules.movement;
 
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
-import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
+import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 
 public class Sprint extends Module {
-    public static Sprint instance;
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-    // 只需要这个设置：暂停多久。Grim 推荐 4-6，太短会被 Simulation 检测。
-    private final Setting<Integer> hitUnSprintTicks = sgGeneral.add(new IntSetting.Builder()
-        .name("hit-unsprint-ticks").defaultValue(5).min(3).max(15).build());
+    public enum Mode {
+        Strict,
+        Rage
+    }
 
-    private final Setting<Boolean> stopOnHurt = sgGeneral.add(new BoolSetting.Builder()
-        .name("stop-on-hurt").defaultValue(true).build());
+    public final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
+        .name("sprint-mode")
+        .description("What mode of sprinting.")
+        .defaultValue(Mode.Strict)
+        .build()
+    );
+
+    private final Setting<Boolean> keepSprint = sgGeneral.add(new BoolSetting.Builder()
+        .name("keep-sprint")
+        .description("Whether to keep sprinting after attacking.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Boolean> unsprintOnHit = sgGeneral.add(new BoolSetting.Builder()
+        .name("unsprint-on-hit")
+        .description("Whether to stop sprinting before attacking, to ensure you get crits and sweep attacks.")
+        .defaultValue(false)
+        .build()
+    );
+
+    public final Setting<Boolean> unsprintInWater = sgGeneral.add(new BoolSetting.Builder()
+        .name("unsprint-in-water")
+        .description("Whether to stop sprinting when in water.")
+        .defaultValue(true)
+        .visible(() -> mode.get() == Mode.Rage)
+        .build()
+    );
+
+    private final Setting<Boolean> permaSprint = sgGeneral.add(new BoolSetting.Builder()
+        .name("sprint-while-stationary")
+        .description("Sprint even when not moving.")
+        .defaultValue(false)
+        .visible(() -> mode.get() == Mode.Rage)
+        .build()
+    );
 
     public Sprint() {
-        super(Categories.Movement, "sprint", "GrimAC 纯净版");
-        instance = this;
+        super(Categories.Movement, "sprint", "Automatically sprints.");
     }
 
-    private int pauseTicks = 0;
+    @EventHandler(priority = EventPriority.HIGH)
+    private void onTickMovement(TickEvent.Post event) {
+        if (unsprintInWater.get() && mc.player.isTouchingWater()) return;
 
-    @Override
-    public void onActivate() {
-        instance = this;
-        pauseTicks = 0;
+        mc.player.setSprinting(shouldSprint());
     }
 
-    @Override
-    public void onDeactivate() {
-        instance = null;
+    @EventHandler(priority = EventPriority.HIGH)
+    private void onPacketSend(PacketEvent.Send event) {
+        if (!unsprintOnHit.get()) return;
+        if (!(event.packet instanceof IPlayerInteractEntityC2SPacket packet)
+            || packet.meteor$getType() != PlayerInteractEntityC2SPacket.InteractType.ATTACK) return;
+
+        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.STOP_SPRINTING));
+        mc.player.setSprinting(false);
     }
 
-    /**
-     * 唯一的对外接口：暂停疾跑
-     */
-    public void pause() {
-        pause(hitUnSprintTicks.get());
-    }
-    
-    /**
-     * 带参数的暂停方法，用于GrimAC兼容
-     */
-    public void pause(int ticks) {
-        this.pauseTicks = ticks;
-        if (mc.player != null) {
-            mc.player.setSprinting(false);
-            // 关键：同时解除按键绑定状态，防止原生逻辑干扰
-            if (mc.options != null) mc.options.sprintKey.setPressed(false);
-        }
+    @EventHandler
+    private void onPacketSent(PacketEvent.Sent event) {
+        if (!unsprintOnHit.get() || !keepSprint.get()) return;
+        if (!(event.packet instanceof IPlayerInteractEntityC2SPacket packet)
+            || packet.meteor$getType() != PlayerInteractEntityC2SPacket.InteractType.ATTACK) return;
+
+        if (!shouldSprint() || mc.player.isSprinting()) return;
+
+        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING));
+        mc.player.setSprinting(true);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
-    private void onPreTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null) return;
+    public boolean shouldSprint() {
+        if (mc.currentScreen != null && !Modules.get().get(GUIMove.class).sprint.get()) return false;
 
-        // 1. 处于暂停期，强行按死
-        if (pauseTicks > 0) {
-            pauseTicks--;
-            mc.player.setSprinting(false);
-            if (mc.options != null) mc.options.sprintKey.setPressed(false);
-            return;
+        float movement = mode.get() == Mode.Rage
+            ? (Math.abs(mc.player.forwardSpeed) + Math.abs(mc.player.sidewaysSpeed))
+            : mc.player.forwardSpeed;
+
+        if (movement <= (mc.player.isSubmergedInWater() ? 1.0E-5F : 0.8)) {
+            if (mode.get() == Mode.Strict || !permaSprint.get()) return false;
         }
 
         boolean strictSprint = !(mc.player.isPartlyTouchingWater())
@@ -77,30 +114,18 @@ public class Sprint extends Module {
             && mc.player.hasVehicle() ? (mc.player.getVehicle().canSprintAsVehicle() && mc.player.getVehicle().isLogicalSideForUpdatingMovement()) : mc.player.getHungerManager().canSprint()
             && (!mc.player.horizontalCollision || mc.player.collidedSoftly);
 
-        // 3. 正常疾跑逻辑
-        if (shouldSprint()) {
-            mc.player.setSprinting(true);
-            if (mc.options != null) mc.options.sprintKey.setPressed(true);
-        } else {
-            mc.player.setSprinting(false);
-            if (mc.options != null && !mc.options.sprintKey.isDefault()) {
-                mc.options.sprintKey.setPressed(false);
-            }
-        }
+        return isActive() && (mode.get() == Mode.Rage || strictSprint);
     }
 
-    private boolean shouldSprint() {
-        return !mc.player.isSneaking() 
-            && mc.options.forwardKey.isPressed() 
-            && !mc.player.horizontalCollision 
-            && mc.player.getHungerManager().getFoodLevel() > 6
-            && !mc.player.isTouchingWater();
+    public boolean rageSprint() {
+        return isActive() && mode.get() == Mode.Rage;
     }
-    
-    // 删除了 onSendPacket 监听，防止逻辑双重触发
 
-    public boolean rageSprint() { return false; }
-    public boolean unsprintInWater() { return mc.player != null && mc.player.isTouchingWater() && !mc.player.isSubmergedInWater(); }
-    public boolean stopSprinting() { return pauseTicks > 0; }
-    public void onAttackTriggered() { pause(); }
+    public boolean unsprintInWater() {
+        return isActive() && unsprintInWater.get();
+    }
+
+    public boolean stopSprinting() {
+        return !isActive() || !keepSprint.get();
+    }
 }

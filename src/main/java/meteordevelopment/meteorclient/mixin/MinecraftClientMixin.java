@@ -28,7 +28,6 @@ import meteordevelopment.meteorclient.systems.modules.misc.InventoryTweaks;
 import meteordevelopment.meteorclient.systems.modules.movement.GUIMove;
 import meteordevelopment.meteorclient.systems.modules.player.FastUse;
 import meteordevelopment.meteorclient.systems.modules.player.Multitask;
-import meteordevelopment.meteorclient.systems.modules.combat.FastPlace;
 import meteordevelopment.meteorclient.systems.modules.render.ESP;
 import meteordevelopment.meteorclient.systems.modules.world.HighwayBuilder;
 import meteordevelopment.meteorclient.utils.Utils;
@@ -79,6 +78,9 @@ public abstract class MinecraftClientMixin implements IMinecraftClient {
     @Shadow
     @Nullable
     public ClientPlayerInteractionManager interactionManager;
+
+    @Shadow
+    private int itemUseCooldown;
 
     @Shadow
     @Nullable
@@ -178,14 +180,7 @@ public abstract class MinecraftClientMixin implements IMinecraftClient {
     private void onDoItemUseHand(CallbackInfo ci, @Local ItemStack itemStack) {
         FastUse fastUse = Modules.get().get(FastUse.class);
         if (fastUse.isActive()) {
-            ((MinecraftClientAccessor)(Object)this).meteor$setItemUseCooldown(fastUse.getItemUseCooldown(itemStack));
-        }
-        
-        // FastPlace support - 修复：简化逻辑，直接设置延迟
-        FastPlace fastPlace = Modules.get().get(FastPlace.class);
-        if (fastPlace.isActive() && itemStack.getItem() instanceof net.minecraft.item.BlockItem) {
-            // 简化逻辑：对所有方块启用快放，设置最小延迟
-            ((MinecraftClientAccessor)(Object)this).meteor$setItemUseCooldown(1);
+            itemUseCooldown = fastUse.getItemUseCooldown(itemStack);
         }
     }
 

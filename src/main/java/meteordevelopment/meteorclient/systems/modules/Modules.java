@@ -404,7 +404,6 @@ public class Modules extends System<Modules> {
     private void initCombat() {
         add(new TriggerBotV2());
         add(new UltimateSprint());
-        add(new FastPlace());
         add(new AutoJumpReset());
         add(new NoJumpDelay());
         add(new LegitTrap());
@@ -420,7 +419,6 @@ public class Modules extends System<Modules> {
         add(new Criticals());
         add(new CrystalAura());
         add(new Hitboxes());
-        add(new HitIndicators());
         add(new KillAura());
   
     }
@@ -565,6 +563,8 @@ public class Modules extends System<Modules> {
     }
 
     private void initMisc() {
+                add(new AntiPacketKick());
+
         add(new AutoReconnect());
         add(new BetterBeacons());
         add(new BetterChat());

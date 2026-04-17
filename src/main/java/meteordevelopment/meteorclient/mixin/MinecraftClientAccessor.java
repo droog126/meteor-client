@@ -29,12 +29,6 @@ public interface MinecraftClientAccessor {
         return 0;
     }
 
-    @Accessor("itemUseCooldown")
-    int meteor$getItemUseCooldown();
-
-    @Accessor("itemUseCooldown")
-    void meteor$setItemUseCooldown(int itemUseCooldown);
-
     @Mutable
     @Accessor("session")
     void meteor$setSession(Session session);

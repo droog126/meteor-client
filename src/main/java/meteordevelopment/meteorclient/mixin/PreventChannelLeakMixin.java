@@ -23,9 +23,7 @@ public class PreventChannelLeakMixin {
     private void onSendPacket(Packet<?> packet, CallbackInfo ci) {
         if (packet instanceof CustomPayloadC2SPacket payloadPacket) {
             
-            // 修复点：使用 .getId().id()
-            // .getId() 获取 CustomPayload.Id 对象
-            // .id() 获取 Identifier
+        
             Identifier id = payloadPacket.payload().getId().id();
             
             String channelName = id.toString().toLowerCase();

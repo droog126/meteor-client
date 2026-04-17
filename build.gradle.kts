@@ -95,7 +95,7 @@ dependencies {
     jij(libs.waybackauthlib)
     
     // Add missing dependency for com.google.j2objc.annotations
-    compileOnlyApi("com.google.guava:guava:31.0.1-jre")
+    // compileOnlyApi("com.google.guava:guava:31.0.1-jre")
 }
 
 sourceSets {

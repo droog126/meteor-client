@@ -127,13 +127,9 @@ public abstract class WorldRendererMixin implements IWorldRenderer {
     @Unique
     private RenderDispatcher renderDispatcher;
 
-    // 优化：缓存渲染 dispatcher，避免重复创建
-    private boolean dispatcherInitialized = false;
-
     @Inject(method = "pushEntityRenders", at = @At("TAIL"))
     private void onPushEntityRenders(MatrixStack matrices, WorldRenderState worldState, OrderedRenderCommandQueue queue, CallbackInfo info) {
-        // 优化：只在首次使用时初始化Dispatcher
-        if (!dispatcherInitialized) {
+        if (renderDispatcher == null) {
             renderDispatcher = new RenderDispatcher(
                 outlineRenderCommandQueue,
                 mc.getBlockRenderManager(),
@@ -143,7 +139,6 @@ public abstract class WorldRendererMixin implements IWorldRenderer {
                 NoopImmediateVertexConsumerProvider.INSTANCE,
                 mc.textRenderer
             );
-            dispatcherInitialized = true;
         }
 
         draw(worldState, matrices, PostProcessShaders.CHAMS, entity -> Color.WHITE);
@@ -155,7 +150,6 @@ public abstract class WorldRendererMixin implements IWorldRenderer {
         var camera = worldState.cameraRenderState.pos;
         var empty = true;
 
-        // 优化：预过滤实体，减少不必要的计算
         for (var state : worldState.entityRenderStates) {
             Entity entity = ((IEntityRenderState) state).meteor$getEntity();
             if (entity == null) continue;
@@ -164,10 +158,6 @@ public abstract class WorldRendererMixin implements IWorldRenderer {
 
             var color = colorGetter.apply(entity);
             if (color == null) continue;
-            
-            // 优化：检查渲染距离
-            if (!isEntityInRenderRange(entity, camera)) continue;
-
             outlineRenderCommandQueue.setColor(color);
 
             var renderer = entityRenderManager.getRenderer(state);
@@ -192,18 +182,6 @@ public abstract class WorldRendererMixin implements IWorldRenderer {
 
         provider = null;
         meteor$popEntityOutlineFramebuffer();
-    }
-    
-    // 新增：检查实体是否在渲染范围内
-    private boolean isEntityInRenderRange(Entity entity, Vec3d camera) {
-        double dx = entity.getX() - camera.x;
-        double dy = entity.getY() - camera.y;
-        double dz = entity.getZ() - camera.z;
-        double distanceSquared = dx * dx + dy * dy + dz * dz;
-        
-        // 使用渲染距离的平方进行比较
-        int renderDistance = mc.options.getViewDistance().getValue() * 16;
-        return distanceSquared <= (renderDistance * renderDistance);
     }
 
     @ModifyExpressionValue(method = "fillEntityRenderStates", at = @At(value= "INVOKE", target = "Lnet/minecraft/client/render/WorldRenderer;isRenderingReady(Lnet/minecraft/util/math/BlockPos;)Z"))

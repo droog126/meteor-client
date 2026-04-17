@@ -544,7 +544,7 @@ public class Utils {
         // check if a screen is open
         // see net.minecraft.client.Mouse.lockCursor
         // see net.minecraft.client.MinecraftClient.tick
-        int attackCooldown = (int) ((MinecraftClientAccessor) mc).meteor$getAttackCooldown();
+        int attackCooldown = ((MinecraftClientAccessor) mc).meteor$getAttackCooldown();
         if (attackCooldown == 10000) {
             ((MinecraftClientAccessor) mc).meteor$setAttackCooldown(0);
         }
@@ -590,7 +590,8 @@ public class Utils {
     }
 
     public static boolean isLoading() {
-        return false;
+        ResourceReloadLogger.ReloadState state = ((ResourceReloadLoggerAccessor) ((MinecraftClientAccessor) mc).meteor$getResourceReloadLogger()).meteor$getReloadState();
+        return state == null || !((ReloadStateAccessor) state).meteor$isFinished();
     }
 
     public static int parsePort(String full) {
