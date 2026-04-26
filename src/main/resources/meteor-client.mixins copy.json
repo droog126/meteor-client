@@ -6,6 +6,7 @@
   "client": [
     "PreventChannelLeakMixin",
     "FabricLoaderMixin",
+    "ClientBrandRetrieverMixin",
     "AbstractBlockAccessor",
     "AbstractBlockMixin",
     "AbstractBlockStateMixin",

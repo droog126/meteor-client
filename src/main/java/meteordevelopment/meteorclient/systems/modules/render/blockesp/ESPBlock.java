@@ -18,7 +18,8 @@ import net.minecraft.util.shape.VoxelShapes;
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 public class ESPBlock {
-    private static final BlockPos.Mutable blockPos = new BlockPos.Mutable();
+    private static final Color styledLineColor = new Color();
+    private static final Color styledSideColor = new Color();
 
     private static final BlockESP blockEsp = Modules.get().get(BlockESP.class);
 
@@ -72,8 +73,8 @@ public class ESPBlock {
 
     private void assignGroup() {
         ESPGroup firstGroup = null;
-        boolean isInGroup1 = blockEsp.getBlocks1().contains(state.getBlock());
-        boolean isInGroup2 = blockEsp.getBlocks2().contains(state.getBlock());
+        boolean isInGroup1 = blockEsp.isInGroup1(state.getBlock());
+        boolean isInGroup2 = blockEsp.isInGroup2(state.getBlock());
 
         // First check if the block is in both groups
         if (isInGroup1 && isInGroup2) {
@@ -88,9 +89,8 @@ public class ESPBlock {
             ESPBlock neighbour = getSideBlock(side);
             if (neighbour == null || neighbour.group == null) continue;
 
-            // Check if neighbour is in the same group as current block
-            boolean neighbourInGroup1 = blockEsp.getBlocks1().contains(neighbour.state.getBlock());
-            boolean neighbourInGroup2 = blockEsp.getBlocks2().contains(neighbour.state.getBlock());
+            boolean neighbourInGroup1 = blockEsp.isInGroup1(neighbour.state.getBlock());
+            boolean neighbourInGroup2 = blockEsp.isInGroup2(neighbour.state.getBlock());
             
             // If current block is in group 1, only consider group 1 neighbours
             if (isInGroup1 && neighbourInGroup1) {
@@ -127,33 +127,34 @@ public class ESPBlock {
     }
 
     public void update() {
+        BlockPos.Mutable blockPos = new BlockPos.Mutable();
         state = mc.world.getBlockState(blockPos.set(x, y, z));
         neighbours = 0;
 
-        if (isNeighbour(Direction.SOUTH)) neighbours |= FO;
-        if (isNeighbourDiagonal(1, 0, 1)) neighbours |= FO_RI;
-        if (isNeighbour(Direction.EAST)) neighbours |= RI;
-        if (isNeighbourDiagonal(1, 0, -1)) neighbours |= BA_RI;
-        if (isNeighbour(Direction.NORTH)) neighbours |= BA;
-        if (isNeighbourDiagonal(-1, 0, -1)) neighbours |= BA_LE;
-        if (isNeighbour(Direction.WEST)) neighbours |= LE;
-        if (isNeighbourDiagonal(-1, 0, 1)) neighbours |= FO_LE;
+        if (isNeighbour(Direction.SOUTH, blockPos)) neighbours |= FO;
+        if (isNeighbourDiagonal(1, 0, 1, blockPos)) neighbours |= FO_RI;
+        if (isNeighbour(Direction.EAST, blockPos)) neighbours |= RI;
+        if (isNeighbourDiagonal(1, 0, -1, blockPos)) neighbours |= BA_RI;
+        if (isNeighbour(Direction.NORTH, blockPos)) neighbours |= BA;
+        if (isNeighbourDiagonal(-1, 0, -1, blockPos)) neighbours |= BA_LE;
+        if (isNeighbour(Direction.WEST, blockPos)) neighbours |= LE;
+        if (isNeighbourDiagonal(-1, 0, 1, blockPos)) neighbours |= FO_LE;
 
-        if (isNeighbour(Direction.UP)) neighbours |= TO;
-        if (isNeighbourDiagonal(0, 1, 1)) neighbours |= TO_FO;
-        if (isNeighbourDiagonal(0, 1, -1)) neighbours |= TO_BA;
-        if (isNeighbourDiagonal(1, 1, 0)) neighbours |= TO_RI;
-        if (isNeighbourDiagonal(-1, 1, 0)) neighbours |= TO_LE;
-        if (isNeighbour(Direction.DOWN)) neighbours |= BO;
-        if (isNeighbourDiagonal(0, -1, 1)) neighbours |= BO_FO;
-        if (isNeighbourDiagonal(0, -1, -1)) neighbours |= BO_BA;
-        if (isNeighbourDiagonal(1, -1, 0)) neighbours |= BO_RI;
-        if (isNeighbourDiagonal(-1, -1, 0)) neighbours |= BO_LE;
+        if (isNeighbour(Direction.UP, blockPos)) neighbours |= TO;
+        if (isNeighbourDiagonal(0, 1, 1, blockPos)) neighbours |= TO_FO;
+        if (isNeighbourDiagonal(0, 1, -1, blockPos)) neighbours |= TO_BA;
+        if (isNeighbourDiagonal(1, 1, 0, blockPos)) neighbours |= TO_RI;
+        if (isNeighbourDiagonal(-1, 1, 0, blockPos)) neighbours |= TO_LE;
+        if (isNeighbour(Direction.DOWN, blockPos)) neighbours |= BO;
+        if (isNeighbourDiagonal(0, -1, 1, blockPos)) neighbours |= BO_FO;
+        if (isNeighbourDiagonal(0, -1, -1, blockPos)) neighbours |= BO_BA;
+        if (isNeighbourDiagonal(1, -1, 0, blockPos)) neighbours |= BO_RI;
+        if (isNeighbourDiagonal(-1, -1, 0, blockPos)) neighbours |= BO_LE;
 
         if (group == null) assignGroup();
     }
 
-    private boolean isNeighbour(Direction dir) {
+    private boolean isNeighbour(Direction dir, BlockPos.Mutable blockPos) {
         blockPos.set(x + dir.getOffsetX(), y + dir.getOffsetY(), z + dir.getOffsetZ());
         BlockState neighbourState = mc.world.getBlockState(blockPos);
 
@@ -195,7 +196,7 @@ public class ESPBlock {
         return false;
     }
 
-    private boolean isNeighbourDiagonal(double x, double y, double z) {
+    private boolean isNeighbourDiagonal(int x, int y, int z, BlockPos.Mutable blockPos) {
         blockPos.set(this.x + x, this.y + y, this.z + z);
         return state.getBlock() == mc.world.getBlockState(blockPos).getBlock();
     }
@@ -204,11 +205,7 @@ public class ESPBlock {
         // Check if group is valid and visible
         if (group == null) return;
         
-        // Check if group is visible
-        if (blockEsp.enableGroupKeybinds.get()) {
-            if (group.groupNumber == 1 && !blockEsp.showGroup1) return;
-            if (group.groupNumber == 2 && !blockEsp.showGroup2) return;
-        }
+        if (!blockEsp.isGroupVisible(group.groupNumber)) return;
 
         double x1 = x;
         double y1 = y;
@@ -217,7 +214,7 @@ public class ESPBlock {
         double y2 = y + 1;
         double z2 = z + 1;
 
-        VoxelShape shape = state.getOutlineShape(mc.world, blockPos);
+        VoxelShape shape = state.getOutlineShape(mc.world, new BlockPos(x, y, z));
 
         if (!shape.isEmpty()) {
             x1 = x + shape.getMin(Direction.Axis.X);
@@ -231,8 +228,11 @@ public class ESPBlock {
         ESPBlockData blockData = blockEsp.getBlockData(state.getBlock());
 
         ShapeMode shapeMode = blockData.shapeMode;
-        Color lineColor = blockData.lineColor;
-        Color sideColor = blockData.sideColor;
+        double cx = (x1 + x2) * 0.5;
+        double cy = (y1 + y2) * 0.5;
+        double cz = (z1 + z2) * 0.5;
+        Color lineColor = blockEsp.styleColor(blockData.lineColor, styledLineColor, cx, cy, cz);
+        Color sideColor = blockEsp.styleColor(blockData.sideColor, styledSideColor, cx, cy, cz);
 
         if (neighbours == 0) {
             event.renderer.box(x1, y1, z1, x2, y2, z2, sideColor, lineColor, shapeMode, 0);

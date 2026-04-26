@@ -55,14 +55,11 @@ public class FabricLoaderMixin {
         for (ModContainer mod : originalList) {
             String modId = mod.getMetadata().getId();
 
-            // 【修改点2】判断逻辑反转：
-            // 如果 modId 在白名单里 -> 放行
-            // 如果 不在白名单里 -> 隐藏
+         
             if (WHITELIST_MODS.contains(modId)) {
                 filteredList.add(mod);
             } else {
                 hiddenCount++;
-                // 你可以在这里打印被隐藏的 modId 方便调试，但为了刷屏少一点，建议只统计数量
             }
         }
 

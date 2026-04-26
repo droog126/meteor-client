@@ -109,7 +109,7 @@ public class ESP extends Module {
     public final Setting<Boolean> hpFlicker = sgGeneral.add(new BoolSetting.Builder()
         .name("hp-flicker")
         .description("Low HP flicker effect for players.")
-        .defaultValue(true)
+        .defaultValue(false)
         .visible(healthColors::get)
         .build()
     );
@@ -155,7 +155,7 @@ public class ESP extends Module {
         .name("fill-opacity")
         .description("The opacity of the shape fill.")
         .visible(() -> shapeMode.get() != ShapeMode.Lines && mode.get() != Mode.Glow)
-        .defaultValue(0.1)
+        .defaultValue(0.07)
         .range(0, 1)
         .sliderMax(1)
         .build()
@@ -164,9 +164,36 @@ public class ESP extends Module {
     private final Setting<Double> fadeDistance = sgGeneral.add(new DoubleSetting.Builder()
         .name("fade-distance")
         .description("The distance from an entity where the color begins to fade.")
-        .defaultValue(3)
+        .defaultValue(6)
         .min(0)
         .sliderMax(12)
+        .build()
+    );
+
+    public final Setting<Boolean> vanillaBlend = sgGeneral.add(new BoolSetting.Builder()
+        .name("vanilla-blend")
+        .description("Softens ESP colors and alpha to blend with vanilla visuals.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Double> vanillaSaturation = sgGeneral.add(new DoubleSetting.Builder()
+        .name("vanilla-saturation")
+        .description("Higher keeps stronger original ESP color, lower looks more natural.")
+        .defaultValue(0.7)
+        .range(0.2, 1.0)
+        .sliderRange(0.2, 1.0)
+        .visible(vanillaBlend::get)
+        .build()
+    );
+
+    public final Setting<Integer> vanillaMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("vanilla-max-alpha")
+        .description("Caps ESP opacity in vanilla blend mode.")
+        .defaultValue(190)
+        .range(60, 255)
+        .sliderRange(60, 255)
+        .visible(vanillaBlend::get)
         .build()
     );
 
@@ -205,7 +232,7 @@ public class ESP extends Module {
     private final Setting<SettingColor> playersColor = sgColors.add(new ColorSetting.Builder()
         .name("players-color")
         .description("The other player's color.")
-        .defaultValue(new SettingColor(220, 220, 220))
+        .defaultValue(new SettingColor(196, 202, 210, 230))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
@@ -213,7 +240,7 @@ public class ESP extends Module {
     private final Setting<SettingColor> animalsColor = sgColors.add(new ColorSetting.Builder()
         .name("animals-color")
         .description("The animal's color.")
-        .defaultValue(new SettingColor(150, 255, 150, 255))
+        .defaultValue(new SettingColor(146, 184, 142, 210))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
@@ -221,7 +248,7 @@ public class ESP extends Module {
     private final Setting<SettingColor> waterAnimalsColor = sgColors.add(new ColorSetting.Builder()
         .name("water-animals-color")
         .description("The water animal's color.")
-        .defaultValue(new SettingColor(150, 150, 255, 255))
+        .defaultValue(new SettingColor(132, 160, 188, 210))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
@@ -229,7 +256,7 @@ public class ESP extends Module {
     private final Setting<SettingColor> monstersColor = sgColors.add(new ColorSetting.Builder()
         .name("monsters-color")
         .description("The monster's color.")
-        .defaultValue(new SettingColor(255, 150, 150, 255))
+        .defaultValue(new SettingColor(196, 126, 126, 220))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
@@ -237,7 +264,7 @@ public class ESP extends Module {
     private final Setting<SettingColor> ambientColor = sgColors.add(new ColorSetting.Builder()
         .name("ambient-color")
         .description("The ambient's color.")
-        .defaultValue(new SettingColor(150, 150, 150, 255))
+        .defaultValue(new SettingColor(138, 144, 152, 205))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
@@ -245,22 +272,46 @@ public class ESP extends Module {
     private final Setting<SettingColor> miscColor = sgColors.add(new ColorSetting.Builder()
         .name("misc-color")
         .description("The misc color.")
-        .defaultValue(new SettingColor(200, 200, 200, 255))
+        .defaultValue(new SettingColor(166, 172, 178, 205))
         .visible(() -> colorMode.get() == ESPColorMode.EntityType)
         .build()
     );
 
     private final Setting<SettingColor> targetColor = sgColors.add(new ColorSetting.Builder()
         .name("target-color")
-        .defaultValue(new SettingColor(230, 230, 230, 255))
+        .defaultValue(new SettingColor(224, 214, 198, 235))
         .visible(highlightTarget::get)
         .build()
     );
 
     private final Setting<SettingColor> targetHitboxColor = sgColors.add(new ColorSetting.Builder()
         .name("target-hitbox-color")
-        .defaultValue(new SettingColor(150, 220, 220, 255))
+        .defaultValue(new SettingColor(154, 196, 198, 225))
         .visible(() -> highlightTarget.get() && targetHitbox.get())
+        .build()
+    );
+
+    private final Setting<SettingColor> lowHpColor = sgColors.add(new ColorSetting.Builder()
+        .name("low-hp-color")
+        .description("Low HP color.")
+        .defaultValue(new SettingColor(212, 96, 96, 255))
+        .visible(healthColors::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> mediumHpColor = sgColors.add(new ColorSetting.Builder()
+        .name("medium-hp-color")
+        .description("Medium HP color.")
+        .defaultValue(new SettingColor(214, 180, 110, 255))
+        .visible(healthColors::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> highHpColor = sgColors.add(new ColorSetting.Builder()
+        .name("high-hp-color")
+        .description("High HP color.")
+        .defaultValue(new SettingColor(132, 196, 146, 255))
+        .visible(healthColors::get)
         .build()
     );
 
@@ -270,10 +321,7 @@ public class ESP extends Module {
     private final Color sideColor          = new Color();
     private final Color baseColor          = new Color();
     private final Color mutableHealthColor = new Color();
-
-    private final Color LOW_HP    = new Color(255, 120, 120);
-    private final Color MEDIUM_HP = new Color(255, 230, 150);
-    private final Color HIGH_HP   = new Color(150, 255, 190);
+    private final Color blendedColor       = new Color();
 
     private final Vector3d pos1 = new Vector3d();
     private final Vector3d pos2 = new Vector3d();
@@ -472,7 +520,7 @@ public class ESP extends Module {
 
     public Color getColor(Entity entity, boolean isTarget) {
         if (isTarget) {
-            return baseColor.set(targetColor.get());
+            return applyVanillaTone(baseColor.set(targetColor.get()));
         }
 
         double alpha = getFadeAlpha(entity);
@@ -481,7 +529,7 @@ public class ESP extends Module {
         Color color = getEntityTypeColor(entity);
         if (color == null) return null;
 
-        return baseColor.set(color.r, color.g, color.b, (int) (color.a * alpha));
+        return applyVanillaTone(baseColor.set(color.r, color.g, color.b, (int) (color.a * alpha)));
     }
 
     public Color getColor(Entity entity) {
@@ -491,20 +539,34 @@ public class ESP extends Module {
     }
 
     private double getFadeAlpha(Entity entity) {
-        double distSq = PlayerUtils.squaredDistanceToCamera(
+        double dist = PlayerUtils.distanceToCamera(
             entity.getX() + entity.getWidth() / 2,
             entity.getY() + entity.getEyeHeight(entity.getPose()),
             entity.getZ() + entity.getWidth() / 2
         );
 
-        double fd   = fadeDistance.get();
-        double fdSq = fd * fd;
+        double fd = fadeDistance.get();
+        if (fd <= 0) return 1.0;
 
-        if (distSq <= fdSq && fd > 0) {
-            double alpha = Math.sqrt(distSq) / fd;
-            return alpha <= 0.075 ? 0 : alpha;
+        if (dist <= fd) {
+            return 1.0;
+        } else {
+            double alpha = 1.0 - ((dist - fd) / (fd * 3.0));
+            return MathHelper.clamp(alpha, 0.0, 1.0);
         }
-        return 1.0;
+    }
+
+    private Color applyVanillaTone(Color color) {
+        if (!vanillaBlend.get()) return color;
+
+        int gray = (color.r + color.g + color.b) / 3;
+        double s = vanillaSaturation.get();
+        int r = (int) MathHelper.lerp(s, gray, color.r);
+        int g = (int) MathHelper.lerp(s, gray, color.g);
+        int b = (int) MathHelper.lerp(s, gray, color.b);
+        int a = Math.min(color.a, vanillaMaxAlpha.get());
+
+        return blendedColor.set(r, g, b, a);
     }
 
     public Color getEntityTypeColor(Entity entity) {
@@ -513,7 +575,7 @@ public class ESP extends Module {
             double hpVal = getHp(p);
 
             if (hpVal >= 99) {
-                return mutableHealthColor.set(HIGH_HP);
+                return mutableHealthColor.set(highHpColor.get());
             }
 
             if (hpVal <= 5) {
@@ -521,40 +583,40 @@ public class ESP extends Module {
                     long cycle  = flickerPeriod.get() * 50L;
                     double time = System.currentTimeMillis() % cycle;
                     double sine = (Math.sin((time / cycle) * Math.PI * 2) + 1.0) / 2.0;
-                    int r = (int) MathHelper.lerp(sine, LOW_HP.r, 255);
-                    int g = (int) MathHelper.lerp(sine, LOW_HP.g, 255);
-                    int b = (int) MathHelper.lerp(sine, LOW_HP.b, 255);
+                    int r = (int) MathHelper.lerp(sine, lowHpColor.get().r, 255);
+                    int g = (int) MathHelper.lerp(sine, lowHpColor.get().g, 255);
+                    int b = (int) MathHelper.lerp(sine, lowHpColor.get().b, 255);
                     return mutableHealthColor.set(r, g, b, 255);
                 }
-                return mutableHealthColor.set(LOW_HP);
+                return mutableHealthColor.set(lowHpColor.get());
             }
             else if (hpVal <= 20) {
                 if (hpGradient.get()) {
                     if (hpVal <= 10) {
                         double t = hpVal / 10.0;
                         return mutableHealthColor.set(
-                            (int) MathHelper.lerp(t, LOW_HP.r, MEDIUM_HP.r),
-                            (int) MathHelper.lerp(t, LOW_HP.g, MEDIUM_HP.g),
-                            (int) MathHelper.lerp(t, LOW_HP.b, MEDIUM_HP.b),
+                            (int) MathHelper.lerp(t, lowHpColor.get().r, mediumHpColor.get().r),
+                            (int) MathHelper.lerp(t, lowHpColor.get().g, mediumHpColor.get().g),
+                            (int) MathHelper.lerp(t, lowHpColor.get().b, mediumHpColor.get().b),
                             255
                         );
                     } else {
                         double t = (hpVal - 10.0) / 10.0;
                         return mutableHealthColor.set(
-                            (int) MathHelper.lerp(t, MEDIUM_HP.r, HIGH_HP.r),
-                            (int) MathHelper.lerp(t, MEDIUM_HP.g, HIGH_HP.g),
-                            (int) MathHelper.lerp(t, MEDIUM_HP.b, HIGH_HP.b),
+                            (int) MathHelper.lerp(t, mediumHpColor.get().r, highHpColor.get().r),
+                            (int) MathHelper.lerp(t, mediumHpColor.get().g, highHpColor.get().g),
+                            (int) MathHelper.lerp(t, mediumHpColor.get().b, highHpColor.get().b),
                             255
                         );
                     }
                 }
-                return hpVal <= 10 ? mutableHealthColor.set(LOW_HP) : mutableHealthColor.set(MEDIUM_HP);
+                return hpVal <= 10 ? mutableHealthColor.set(lowHpColor.get()) : mutableHealthColor.set(mediumHpColor.get());
             }
             else {
-                return mutableHealthColor.set(HIGH_HP);
+                return mutableHealthColor.set(highHpColor.get());
             }
         }
-        
+
         // 覆盖好友颜色
         if (friendOverride.get() && entity instanceof PlayerEntity pe && Friends.get().isFriend(pe)) {
             return Config.get().friendColor.get();

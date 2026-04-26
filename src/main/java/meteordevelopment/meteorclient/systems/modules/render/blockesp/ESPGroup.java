@@ -10,6 +10,7 @@ import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.UnorderedArrayList;
 import meteordevelopment.meteorclient.utils.render.RenderUtils;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import net.minecraft.block.Block;
 
 import java.util.ArrayDeque;
@@ -18,6 +19,7 @@ import java.util.Set;
 
 public class ESPGroup {
     private static final BlockESP blockEsp = Modules.get().get(BlockESP.class);
+    private static final Color styledTracerColor = new Color();
 
     public final int id;
     public final int groupNumber;
@@ -145,16 +147,16 @@ public class ESPGroup {
     }
 
     public void render(Render3DEvent event) {
-        // Check if group is visible
-        if (blockEsp.enableGroupKeybinds.get()) {
-            if (groupNumber == 1 && !blockEsp.showGroup1) return;
-            if (groupNumber == 2 && !blockEsp.showGroup2) return;
-        }
+        if (!blockEsp.isGroupVisible(groupNumber)) return;
 
         ESPBlockData blockData = blockEsp.getBlockData(block);
 
         if (blockData.tracer) {
-            event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, sumX / blocks.size() + 0.5, sumY / blocks.size() + 0.5, sumZ / blocks.size() + 0.5, blockData.tracerColor);
+            double x = sumX / blocks.size() + 0.5;
+            double y = sumY / blocks.size() + 0.5;
+            double z = sumZ / blocks.size() + 0.5;
+            Color tracerColor = blockEsp.styleColor(blockData.tracerColor, styledTracerColor, x, y, z);
+            event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, x, y, z, tracerColor);
         }
     }
 }

@@ -14,187 +14,142 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.scoreboard.AbstractTeam;
 import net.minecraft.item.Items;
-import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.scoreboard.AbstractTeam;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 
-import java.util.Random;
 import java.util.Set;
 
 public class TriggerBotV2 extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgLogic   = settings.createGroup("Logic (判定)");
-    private final SettingGroup sgTiming  = settings.createGroup("Timing (延迟/冷却)");
+    private final SettingGroup sgTactics = settings.createGroup("战术 (Tactics)");
 
-    private final Random random = new Random();
-
-    // ==================== General ====================
+    // ==================== 常规设置 ====================
     private final Setting<Set<EntityType<?>>> entities = sgGeneral.add(new EntityTypeListSetting.Builder()
-        .name("entities").defaultValue(Set.of(EntityType.PLAYER)).build());
+        .name("entities").description("攻击的实体类型").defaultValue(Set.of(EntityType.PLAYER)).build());
 
     private final Setting<Boolean> checkTeams = sgGeneral.add(new BoolSetting.Builder()
-        .name("check-teams").defaultValue(true).build());
+        .name("check-teams").description("不攻击队友").defaultValue(true).build());
 
-    // ==================== Logic ====================
-    private final Setting<Boolean> smartAirSwing = sgLogic.add(new BoolSetting.Builder()
-        .name("smart-air-swing").defaultValue(true).build());
+    private final Setting<Double> hitThreshold = sgGeneral.add(new DoubleSetting.Builder()
+        .name("hit-threshold").description("连击平砍冷却阈值").defaultValue(0.95).min(0.0).max(1.0).build());
 
-    private final Setting<Double> airSwingMin = sgLogic.add(new DoubleSetting.Builder()
-        .name("air-swing-min").defaultValue(4.5).visible(smartAirSwing::get).build());
+    private final Setting<Double> critThreshold = sgGeneral.add(new DoubleSetting.Builder()
+        .name("crit-threshold").description("连击暴击冷却阈值").defaultValue(0.85).min(0.0).max(1.0).build());
 
-    private final Setting<Double> airSwingMax = sgLogic.add(new DoubleSetting.Builder()
-        .name("air-swing-max").defaultValue(5.5).visible(smartAirSwing::get).build());
+    // ==================== 距离 + 角度判定设置 ====================
+    private final Setting<Double> maxReach = sgGeneral.add(new DoubleSetting.Builder()
+        .name("max-reach").description("最大攻击距离 (距离平方判定)").defaultValue(3.0).min(1.0).max(6.0).sliderMax(6.0).build());
 
-    // ==================== Timing ====================
-    private final Setting<Double> critThreshold = sgTiming.add(new DoubleSetting.Builder()
-        .name("crit-threshold").defaultValue(0.72).build());
+    private final Setting<Double> maxAngle = sgGeneral.add(new DoubleSetting.Builder()
+        .name("max-angle").description("最大视角夹角 (度)。准星偏离目标中心超过此角度则不触发").defaultValue(30.0).min(5.0).max(55.0).sliderMax(60.0).build());
 
-    private final Setting<Double> firstHitThreshold = sgTiming.add(new DoubleSetting.Builder()
-        .name("first-hit-threshold").defaultValue(0.80).build());
+    // ==================== 战术设置 ====================
+    private final Setting<Boolean> smartAirSwing = sgTactics.add(new BoolSetting.Builder()
+        .name("smart-air-swing").description("周围没人时自动空挥 (每次开启仅触发1次)").defaultValue(true).build());
 
-    private final Setting<Double> comboMinThreshold = sgTiming.add(new DoubleSetting.Builder()
-        .name("combo-min").defaultValue(0.875).build());
+    private final Setting<Double> airSwingRange = sgTactics.add(new DoubleSetting.Builder()
+        .name("air-swing-range").description("探测周围没人的范围").defaultValue(4.5).visible(smartAirSwing::get).build());
 
-    private final Setting<Double> comboMaxThreshold = sgTiming.add(new DoubleSetting.Builder()
-        .name("combo-max").defaultValue(1.0).build());
-
-    // ==================== State (Static) ====================
-    private static Entity lockedTarget = null;
-
-    // ==================== State (Instance) ====================
-    private boolean isFirstAttack        = true;
-    private Entity  lastTickTarget       = null;
-    private double  cachedComboThreshold = -1;
-    private boolean hasClickedThisTick   = false;
+    // ==================== 状态记录 ====================
+    private boolean isFirstAttack = true;
+    private boolean hasAirSwung = false;
 
     public TriggerBotV2() {
-        super(Categories.Combat, "trigger-bot-v2", "Instant activation. (0-Delay when walking)");
+        super(Categories.Combat, "trigger-bot-v2", "全局1次首刀0冷却，全局1次战术空挥，重锤瞬间破甲。");
     }
 
     @Override
     public void onActivate() {
-        resetState();
-    }
-
-    @Override
-    public void onDeactivate() {
-        resetState();
-    }
-
-    private void resetState() {
-        isFirstAttack        = true;
-        lockedTarget         = null;
-        lastTickTarget       = null;
-        cachedComboThreshold = -1;
+        isFirstAttack = true;
+        hasAirSwung = false;
     }
 
     @EventHandler(priority = EventPriority.HIGH)
     private void onPreTick(TickEvent.Pre event) {
-        hasClickedThisTick = false;
         if (mc.player == null || mc.world == null || mc.player.isUsingItem()) return;
 
-        // --- Layer 1: 重锤快速路径 ---
-        if (isMace()) {
-            if (mc.player.fallDistance >= 1.5f) {
-                Entity target = getCrosshairTarget();
-                if (target != null) {
-                    doLeftClick(false);
+        Entity target = getCrosshairTarget();
+
+        // ================= 准星没有对准任何人 =================
+        if (target == null) {
+            if (smartAirSwing.get() && !hasAirSwung && mc.player.getAttackCooldownProgress(0.0f) >= 1.0f) {
+                if (getNearbyValidTargetsCount(airSwingRange.get()) == 0) {
+                    ((MinecraftClientAccessor) mc).meteor$leftClick();
+                    hasAirSwung = true;
                 }
             }
             return;
         }
 
-        // --- Layer 2: Smart Air Swing ---
-        if (isFirstAttack && smartAirSwing.get()) {
-            Entity crosshairTarget = getCrosshairTarget();
-            boolean targetIsPlayer = crosshairTarget instanceof PlayerEntity;
+        // ================= 准星对准了目标 =================
 
-            // 只有准星对着玩家、或没对着任何合法目标时，才执行空挥逻辑
-            if (targetIsPlayer || crosshairTarget == null) {
-                double range = airSwingMin.get() + (random.nextDouble() * (airSwingMax.get() - airSwingMin.get()));
-                if (getNearbyPlayersCount(range) == 0) {
-                    doLeftClick(false);
-                    return;
-                }
-            }
-        }
-
-        // --- Layer 3: Combat Logic ---
-        Entity currentTarget = getCrosshairTarget();
-
-        // 目标死亡时重置锁定
-        if (lockedTarget != null && !lockedTarget.isAlive()) {
-            lockedTarget         = null;
-            isFirstAttack        = true;
-            cachedComboThreshold = -1;
-        }
-
-        if (currentTarget == null) {
-            lastTickTarget = null;
-            return;
-        }
-
-        // 连击时，只有当准星指向已锁定的目标才处理
-        if (!isFirstAttack && currentTarget != lockedTarget) {
-            lastTickTarget = currentTarget;
-            return;
-        }
-
-        lastTickTarget = currentTarget;
-
-        boolean shouldCrit = canCrit();
-
-        if (!isFirstAttack && cachedComboThreshold == -1) {
-            cachedComboThreshold = comboMinThreshold.get()
-                + (random.nextDouble() * (comboMaxThreshold.get() - comboMinThreshold.get()));
-        }
-
-        float progress = mc.player.getAttackCooldownProgress(0.5f);
-        float predictedProgress = progress;
-
-        boolean readyToAttack = false;
-
-        if (shouldCrit) {
-            readyToAttack = (predictedProgress >= critThreshold.get());
-        } else {
-            if (isFirstAttack) {
-                readyToAttack = (predictedProgress >= firstHitThreshold.get());
-            } else {
-                readyToAttack = (predictedProgress >= cachedComboThreshold);
-            }
-        }
-
-        if (readyToAttack) {
-            if (isFirstAttack) lockedTarget = currentTarget;
-            doLeftClick(shouldCrit);
-            postAttackProcessing();
-        }
-    }
-
-    private void postAttackProcessing() {
-        isFirstAttack        = false;
-        cachedComboThreshold = -1;
-    }
-
-    private void doLeftClick(boolean requestCrit) {
-        if (hasClickedThisTick) return;
-        if (requestCrit) {
+        // 【重锤无视冷却直接砸】
+        if (isMace() && mc.player.fallDistance >= 1.5f) {
             UltimateSprint.requestCritUnsprint(() -> ((MinecraftClientAccessor) mc).meteor$leftClick());
-        } else {
-            ((MinecraftClientAccessor) mc).meteor$leftClick();
+            isFirstAttack = false;
+            return;
         }
-        hasClickedThisTick = true;
+
+        // 【首刀无视冷却直接砍】
+        if (isFirstAttack) {
+            UltimateSprint.requestCritUnsprint(() -> ((MinecraftClientAccessor) mc).meteor$leftClick());
+            isFirstAttack = false;
+            return;
+        }
+
+        // 【后续连击】严格依据设定的冷却阈值
+        boolean isFalling = canCrit();
+        float progress = mc.player.getAttackCooldownProgress(0.5f);
+        double required = isFalling ? critThreshold.get() : hitThreshold.get();
+
+        if (progress >= required) {
+            UltimateSprint.requestCritUnsprint(() -> ((MinecraftClientAccessor) mc).meteor$leftClick());
+        }
     }
 
-    private Entity getCrosshairTarget() {
-        if (mc.crosshairTarget instanceof EntityHitResult ehr) {
-            Entity entity = ehr.getEntity();
-            if (isValid(entity)) return entity;
+    // ========== 距离 + 视角夹角 目标获取（通用游戏开发数学原理） ==========
+  private Entity getCrosshairTarget() {
+        if (mc.world == null || mc.player == null) return null;
+
+        Vec3d eyePos = mc.player.getCameraPosVec(1.0f);
+        Vec3d lookVec = mc.player.getRotationVec(1.0f).normalize();
+        double reachSq = maxReach.get() * maxReach.get();
+        double maxAngleDeg = maxAngle.get();
+
+        Entity bestTarget = null;
+        double bestAngle = Double.MAX_VALUE;
+
+        Box searchBox = mc.player.getBoundingBox().expand(maxReach.get());
+        for (Entity entity : mc.world.getOtherEntities(mc.player, searchBox, this::isValid)) {
+            Vec3d targetPos = entity.getBoundingBox().getCenter();
+            double distSq = eyePos.squaredDistanceTo(targetPos);
+            if (distSq > reachSq) continue;
+
+            Vec3d toTarget = targetPos.subtract(eyePos).normalize();
+            double dot = lookVec.dotProduct(toTarget);
+            dot = Math.max(-1.0, Math.min(1.0, dot));
+            double angle = Math.toDegrees(Math.acos(dot));
+
+            if (angle > maxAngleDeg) continue;
+
+            if (angle < bestAngle) {
+                bestAngle = angle;
+                bestTarget = entity;
+            }
         }
-        return null;
+
+        return bestTarget;
+    }
+    // 获取附近合法目标数量（用于战术空挥）
+    private int getNearbyValidTargetsCount(double range) {
+        if (mc.world == null) return 0;
+        Box box = mc.player.getBoundingBox().expand(range);
+        return mc.world.getOtherEntities(mc.player, box, this::isValid).size();
     }
 
+    // 实体合法性判定
     private boolean isValid(Entity e) {
         if (e == null || !e.isAlive() || e == mc.player) return false;
         if (e instanceof LivingEntity le && le.getHealth() <= 0) return false;
@@ -209,26 +164,18 @@ public class TriggerBotV2 extends Module {
 
     private boolean isTeammate(PlayerEntity p) {
         if (mc.player.isTeammate(p)) return true;
-        AbstractTeam myTeam     = mc.player.getScoreboardTeam();
+        AbstractTeam myTeam = mc.player.getScoreboardTeam();
         AbstractTeam targetTeam = p.getScoreboardTeam();
         return myTeam != null && targetTeam != null && myTeam.getColor() == targetTeam.getColor();
-    }
-
-    private int getNearbyPlayersCount(double range) {
-        if (mc.world == null) return 0;
-        Box box = mc.player.getBoundingBox().expand(range);
-        return mc.world.getOtherEntities(mc.player, box, e ->
-            e instanceof PlayerEntity p && isValid(p)
-        ).size();
     }
 
     private boolean isMace() {
         return mc.player.getMainHandStack().isOf(Items.MACE);
     }
-
     private boolean canCrit() {
         return !mc.player.isOnGround()
             && mc.player.fallDistance > 0.0f
+            && mc.player.getVelocity().y < 0 
             && !mc.player.isClimbing()
             && !mc.player.isSubmergedInWater()
             && !mc.player.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.BLINDNESS)

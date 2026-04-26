@@ -10,7 +10,6 @@ import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.systems.modules.player.NameProtect;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
@@ -39,13 +38,6 @@ public class Nametags extends Module {
     private final SettingGroup sgRender  = settings.createGroup("Render");
 
     // General
-    private final Setting<Set<EntityType<?>>> entities = sgGeneral.add(new EntityTypeListSetting.Builder()
-        .name("entities")
-        .description("Select entities to draw nametags on.")
-        .defaultValue(EntityType.PLAYER)
-        .build()
-    );
-
     private final Setting<Double> scale = sgGeneral.add(new DoubleSetting.Builder()
         .name("scale")
         .description("The scale of the nametag.")
@@ -60,6 +52,50 @@ public class Nametags extends Module {
         .name("inverse-distance-scale")
         .description("Nametags are smaller when close and larger when far.")
         .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Double> minScale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("min-scale")
+        .description("Minimum nametag scale when close.")
+        .defaultValue(0.5)
+        .min(0.1)
+        .max(2.0)
+        .sliderRange(0.1, 2.0)
+        .visible(inverseDistanceScale::get)
+        .build()
+    );
+
+    private final Setting<Double> maxScale = sgGeneral.add(new DoubleSetting.Builder()
+        .name("max-scale")
+        .description("Maximum nametag scale when far.")
+        .defaultValue(1.8)
+        .min(0.5)
+        .max(3.0)
+        .sliderRange(0.5, 3.0)
+        .visible(inverseDistanceScale::get)
+        .build()
+    );
+
+    private final Setting<Double> scaleStartDistance = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale-start-distance")
+        .description("Distance where nametags start growing.")
+        .defaultValue(5.0)
+        .min(0.0)
+        .max(30.0)
+        .sliderRange(0.0, 30.0)
+        .visible(inverseDistanceScale::get)
+        .build()
+    );
+
+    private final Setting<Double> scaleEndDistance = sgGeneral.add(new DoubleSetting.Builder()
+        .name("scale-end-distance")
+        .description("Distance where nametags reach maximum scale.")
+        .defaultValue(20.0)
+        .min(5.0)
+        .max(200.0)
+        .sliderRange(5.0, 200.0)
+        .visible(inverseDistanceScale::get)
         .build()
     );
 
@@ -119,29 +155,6 @@ public class Nametags extends Module {
     );
 
     // Players
-    private final Setting<Boolean> showName = sgPlayers.add(new BoolSetting.Builder()
-        .name("show-name")
-        .description("Shows the player's name (required for Prefix and Gamemode features).")
-        .defaultValue(true)
-        .build()
-    );
-
-    private final Setting<Boolean> displayPrefix = sgPlayers.add(new BoolSetting.Builder()
-        .name("use-display-name")
-        .description("Uses the players server display name instead of their account name.")
-        .defaultValue(false)
-        .visible(showName::get)
-        .build()
-    );
-
-    private final Setting<Boolean> displayGameMode = sgPlayers.add(new BoolSetting.Builder()
-        .name("gamemode")
-        .description("Shows the player's GameMode.")
-        .defaultValue(false)
-        .visible(showName::get)
-        .build()
-    );
-
     private final Setting<Boolean> pvpNametag = sgPlayers.add(new BoolSetting.Builder()
         .name("pvp-nametag")
         .description("Show HP nametag on players.")
@@ -185,22 +198,47 @@ public class Nametags extends Module {
     private final Setting<SettingColor> background = sgRender.add(new ColorSetting.Builder()
         .name("background-color")
         .description("The color of the nametag background.")
-        .defaultValue(new SettingColor(0, 0, 0, 75))
+        .defaultValue(new SettingColor(16, 18, 22, 90))
         .build()
     );
 
-    private final Setting<SettingColor> nameColor = sgRender.add(new ColorSetting.Builder()
-        .name("name-color")
-        .description("The color of the nametag names.")
-        .defaultValue(new SettingColor())
+    private final Setting<SettingColor> hpHighColor = sgRender.add(new ColorSetting.Builder()
+        .name("hp-high-color")
+        .description("HP color when health is high.")
+        .defaultValue(new SettingColor(128, 197, 136, 255))
         .build()
     );
 
-    private final Color RED   = new Color(255, 25,  25);
-    private final Color AMBER = new Color(255, 105, 25);
-    private final Color GREEN = new Color(25,  252, 25);
-    private final Color CYAN  = new Color(20,  200, 200);
-    private final Color GOLD  = new Color(232, 185, 35);
+    private final Setting<SettingColor> hpMedColor = sgRender.add(new ColorSetting.Builder()
+        .name("hp-medium-color")
+        .description("HP color when health is medium.")
+        .defaultValue(new SettingColor(218, 156, 82, 255))
+        .build()
+    );
+
+    private final Setting<SettingColor> hpLowColor = sgRender.add(new ColorSetting.Builder()
+        .name("hp-low-color")
+        .description("HP color when health is low.")
+        .defaultValue(new SettingColor(214, 84, 84, 255))
+        .build()
+    );
+
+    private final Setting<SettingColor> armorColor = sgRender.add(new ColorSetting.Builder()
+        .name("armor-color")
+        .description("Armor reduction percentage color.")
+        .defaultValue(new SettingColor(112, 182, 188, 255))
+        .build()
+    );
+
+    private final Setting<SettingColor> armorHighColor = sgRender.add(new ColorSetting.Builder()
+        .name("armor-high-color")
+        .description("Armor reduction percentage color when very high.")
+        .defaultValue(new SettingColor(212, 170, 102, 255))
+        .build()
+    );
+
+    private final Color bgColor = new Color();
+    private final Color textColor = new Color();
 
     private final Vector3d pos = new Vector3d();
 
@@ -227,19 +265,16 @@ public class Nametags extends Module {
         Vec3d cameraPos          = mc.gameRenderer.getCamera().getCameraPos();
 
         for (Entity entity : mc.world.getEntities()) {
-            EntityType<?> type = entity.getType();
-            if (!entities.get().contains(type)) continue;
+            if (entity.getType() != EntityType.PLAYER) continue;
 
-            if (type == EntityType.PLAYER) {
-                if ((ignoreSelf.get() || (freecamNotActive && notThirdPerson))
-                    && entity == mc.player) continue;
+            if ((ignoreSelf.get() || (freecamNotActive && notThirdPerson))
+                && entity == mc.player) continue;
 
-                if (EntityUtils.getGameMode((PlayerEntity) entity) == null
-                    && ignoreBots.get()) continue;
+            if (EntityUtils.getGameMode((PlayerEntity) entity) == null
+                && ignoreBots.get()) continue;
 
-                if (Friends.get().isFriend((PlayerEntity) entity)
-                    && ignoreFriends.get()) continue;
-            }
+            if (Friends.get().isFriend((PlayerEntity) entity)
+                && ignoreFriends.get()) continue;
 
             if (!culling.get() || PlayerUtils.isWithinCamera(entity, maxCullRange.get())) {
                 entityList.add(entity);
@@ -339,16 +374,17 @@ public class Nametags extends Module {
                 double dy = cameraPos.y - entity.getY();
                 double dz = cameraPos.z - entity.getZ();
                 double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                // 最终渲染尺寸不超过 scale 上限 1.5
-                double invScale = scale.get() * MathHelper.clamp(0.4 + dist * 0.06, 0.4, 1.5 / scale.get());
-                if (NametagUtils.to2D(pos, invScale, false)) {
-                    if (entity.getType() == EntityType.PLAYER)
-                        renderNametagPlayer(event, (PlayerEntity) entity, shadow);
+                
+                // 计算缩放因子：根据距离在 minScale 和 maxScale 之间线性插值，并乘以基础 scale
+                double t = MathHelper.clamp((dist - scaleStartDistance.get()) / (scaleEndDistance.get() - scaleStartDistance.get()), 0.0, 1.0);
+                double targetScale = MathHelper.lerp(t, minScale.get(), maxScale.get()) * scale.get();
+                
+                if (NametagUtils.to2D(pos, targetScale, false)) {
+                    renderNametagPlayer(event, (PlayerEntity) entity, shadow);
                 }
             } else {
                 if (NametagUtils.to2D(pos, scale.get())) {
-                    if (entity.getType() == EntityType.PLAYER)
-                        renderNametagPlayer(event, (PlayerEntity) entity, shadow);
+                    renderNametagPlayer(event, (PlayerEntity) entity, shadow);
                 }
             }
         }
@@ -374,51 +410,22 @@ public class Nametags extends Module {
         TextRenderer text = TextRenderer.get();
         NametagUtils.begin(pos, event.drawContext);
 
-        // ── 1. 名字与游戏模式 (Upstream 1.21.11 整合) ──
-        String nameText = "";
-        double nameW = 0;
-
-        if (showName.get()) {
-            // NameProtect 兼容
-            if (player == mc.player) {
-                nameText = Modules.get().get(NameProtect.class).getName(player.getName().getString());
-            } else {
-                // 显示昵称兼容
-                if (displayPrefix.get() && player.getDisplayName() != null) {
-                    nameText = player.getDisplayName().getString();
-                } else {
-                    nameText = player.getName().getString();
-                }
-            }
-
-            // 游戏模式后缀兼容
-            if (displayGameMode.get()) {
-                net.minecraft.world.GameMode gm = EntityUtils.getGameMode(player);
-                if (gm != null) {
-                    String gmStr = gm.name();
-                    // 首字母大写处理 (如 "Survival" -> "S", "Creative" -> "C")
-                    nameText += "[" + gmStr.substring(0, 1).toUpperCase() + gmStr.substring(1) + "]";
-                }
-            }
-            nameW = text.getWidth(nameText, shadow);
-        }
-
-        // ── 2. 血量 (Head 魔改逻辑) ──
+        // ── 1. 血量 (Head 魔改逻辑) ──
         double hp     = getCachedHealth(player);
         int    health = Math.round((float) hp);
 
         Color hpColor;
-        if (hp >= 99)      hpColor = GREEN;
-        else if (hp <= 6)  hpColor = RED;
-        else if (hp <= 12) hpColor = AMBER;
-        else               hpColor = GREEN;
+        if (hp >= 99)      hpColor = hpHighColor.get();
+        else if (hp <= 6)  hpColor = hpLowColor.get();
+        else if (hp <= 12) hpColor = hpMedColor.get();
+        else               hpColor = hpHighColor.get();
 
         String hpText = String.valueOf(health);
 
-        // ── 3. 减伤百分比 (Head 魔改逻辑) ──
+        // ── 2. 减伤百分比 (Head 魔改逻辑) ──
         boolean showReduction  = false;
         String  reductionText  = "";
-        Color   reductionColor = CYAN;
+        Color   reductionColor = armorColor.get();
 
         if (showArmorReduction.get()) {
             double reduction    = calcDamageReduction(player);
@@ -426,11 +433,11 @@ public class Nametags extends Module {
             if (reductionPct > armorReductionThreshold.get()) {
                 showReduction = true;
                 reductionText = reductionPct + "%";
-                reductionColor = reductionPct >= 80 ? GOLD : CYAN;
+                reductionColor = reductionPct >= 80 ? armorHighColor.get() : armorColor.get();
             }
         }
 
-        // ── 4. 距离 (Head 魔改逻辑) ──
+        // ── 3. 距离 (Head 魔改逻辑) ──
         boolean showDist = showDistance.get()
             && (player != mc.getCameraEntity() || Modules.get().isActive(Freecam.class));
         String distText = "";
@@ -444,14 +451,15 @@ public class Nametags extends Module {
         // ── 计算全局动态布局 ──
         double lineH = text.getHeight(shadow);
         double hpW   = text.getWidth(hpText, shadow);
-        double redW  = showReduction ? text.getWidth(reductionText, shadow) : 0;
+        double redW  = showReduction ? text.getWidth(" " + reductionText, shadow) : 0;
         double distW = showDist      ? text.getWidth(distText, shadow)      : 0;
 
-        // 取所有行里最宽的，作为背景板的宽度
-        double maxW  = Math.max(nameW, Math.max(hpW, Math.max(redW, distW)));
+        // 血量和护甲在同一行，取最宽的
+        double firstLineW = hpW + (showReduction ? redW : 0);
+        double maxW  = Math.max(firstLineW, distW);
         double halfW = maxW / 2;
 
-        int lines = (showName.get() ? 1 : 0) + 1 + (showReduction ? 1 : 0) + (showDist ? 1 : 0);
+        int lines = 1 + (showDist ? 1 : 0);
         double totalH = lineH * lines;
 
         drawBg(-halfW, -totalH, maxW, totalH);
@@ -460,19 +468,15 @@ public class Nametags extends Module {
 
         double y = -totalH;
 
-        // 逐行渲染 (动态调整行数)
-        if (showName.get()) {
-            text.render(nameText, -nameW / 2, y, nameColor.get(), shadow);
-            y += lineH;
-        }
-
-        text.render(hpText, -hpW / 2, y, hpColor, shadow);
-        y += lineH;
+        // 血量和护甲在同一行
+        double currentX = -firstLineW / 2;
+        text.render(hpText, currentX, y, hpColor, shadow);
+        currentX += hpW;
 
         if (showReduction) {
-            text.render(reductionText, -redW / 2, y, reductionColor, shadow);
-            y += lineH;
+            text.render(" " + reductionText, currentX, y, reductionColor, shadow);
         }
+        y += lineH;
 
         if (showDist) {
             text.render(distText, -distW / 2, y, EntityUtils.getColorFromDistance(player), shadow);
@@ -484,21 +488,16 @@ public class Nametags extends Module {
 
     private void drawBg(double x, double y, double width, double height) {
         Renderer2D.COLOR.begin();
-        Renderer2D.COLOR.quad(x - 1, y - 1, width + 2, height + 2, background.get());
+        Color color = bgColor.set(background.get());
+        Renderer2D.COLOR.quad(x - 1, y - 1, width + 2, height + 2, color);
         Renderer2D.COLOR.render();
     }
-
-    // ── 枚举 ──────────────────────────────────────────────────────────────────
-
-    public enum Position    { Above, OnTop }
-    public enum Durability  { None, Total, Percentage }
-    public enum DistanceColorMode { Gradient, Flat }
 
     // ── 对外接口 ──────────────────────────────────────────────────────────────
 
     public boolean excludeBots() { return ignoreBots.get(); }
 
     public boolean playerNametags() {
-        return isActive() && entities.get().contains(EntityType.PLAYER);
+        return isActive();
     }
 }

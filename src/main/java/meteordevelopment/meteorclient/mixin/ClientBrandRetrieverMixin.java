@@ -13,8 +13,7 @@ public class ClientBrandRetrieverMixin {
      */
     @Overwrite
     public static String getClientModName() {
-        // 【关键修改】这里要返回 "fabric"，千万别写 "vanilla"
-        // 这样服务器就知道你准备好接收模组数据包了
+    
         return "fabric";
     }
 }

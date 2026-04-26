@@ -77,7 +77,6 @@ public class UltimateSprint extends Module {
         currentDelayTicks = 0;
     }
 
-    // 外部调用接口
     public static void requestCritUnsprint(Runnable callback) {
         if (instance != null && !instance.externalRequest) {
             instance.externalRequest = true;

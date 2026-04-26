@@ -49,9 +49,6 @@ public abstract class EntityRendererMixin<T extends Entity, S extends EntityRend
     @Inject(method = "getDisplayName", at = @At("HEAD"), cancellable = true)
     private void onRenderLabel(T entity, CallbackInfoReturnable<Text> cir) {
         if (noRender.noNametags()) cir.setReturnValue(null);
-        if (!(entity instanceof PlayerEntity player)) return;
-        if (Modules.get().get(Nametags.class).playerNametags() && !(EntityUtils.getGameMode(player) == null && Modules.get().get(Nametags.class).excludeBots()))
-            cir.setReturnValue(null);
     }
 
     @Inject(method = "shouldRender", at = @At("HEAD"), cancellable = true)

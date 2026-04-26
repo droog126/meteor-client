@@ -23,7 +23,6 @@ import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
-import org.apache.commons.lang3.Strings;
 
 import java.net.MalformedURLException;
 import java.net.URI;
@@ -113,9 +112,7 @@ public class ServerSpoof extends Module {
             }
 
             // 2. 品牌伪装
-            // 如果发包是品牌包 (minecraft:brand) 且开启了伪装
             if (spoofBrand.get() && id.equals(BrandCustomPayload.ID.id())) {
-                // 创建一个新的品牌包，内容是我们设定的 (例如 "fabric")
                 CustomPayloadC2SPacket spoofedPacket = new CustomPayloadC2SPacket(new BrandCustomPayload(brand.get()));
 
                 event.sendSilently(spoofedPacket);

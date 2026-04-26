@@ -5,6 +5,7 @@
 
 package meteordevelopment.meteorclient.systems.modules.render;
 
+import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import meteordevelopment.meteorclient.events.entity.player.InteractBlockEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.gui.GuiTheme;
@@ -25,7 +26,6 @@ import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.meteorclient.utils.render.SimpleBlockRenderer;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
-import meteordevelopment.meteorclient.utils.render.postprocess.PostProcessShader;
 import meteordevelopment.meteorclient.utils.render.postprocess.PostProcessShaders;
 import meteordevelopment.meteorclient.utils.world.Dir;
 import meteordevelopment.orbit.EventHandler;
@@ -53,7 +53,7 @@ public class StorageESP extends Module {
     private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
         .name("mode")
         .description("Rendering mode.")
-        .defaultValue(Mode.Shader)
+        .defaultValue(Mode.Box)
         .build()
     );
 
@@ -63,7 +63,7 @@ public class StorageESP extends Module {
         .defaultValue(StorageBlockListSetting.STORAGE_BLOCKS)
         .build()
     );
-    
+
     // 新增：箱子矿车开关
     private final Setting<Boolean> chestMinecarts = sgGeneral.add(new BoolSetting.Builder()
         .name("chest-minecarts")
@@ -90,7 +90,7 @@ public class StorageESP extends Module {
         .name("fill-opacity")
         .description("The opacity of the shape fill.")
         .visible(() -> shapeMode.get() != ShapeMode.Lines)
-        .defaultValue(50)
+        .defaultValue(34)
         .range(0, 255)
         .sliderMax(255)
         .build()
@@ -111,58 +111,85 @@ public class StorageESP extends Module {
         .description("Multiplier for glow effect")
         .visible(() -> mode.get() == Mode.Shader)
         .decimalPlaces(3)
-        .defaultValue(3.5)
+        .defaultValue(2.3)
         .min(0)
         .sliderMax(10)
+        .build()
+    );
+
+    private final Setting<Boolean> vanillaBlend = sgGeneral.add(new BoolSetting.Builder()
+        .name("vanilla-blend")
+        .description("Softens StorageESP color and alpha for a more vanilla-like look.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Double> vanillaSaturation = sgGeneral.add(new DoubleSetting.Builder()
+        .name("vanilla-saturation")
+        .description("Lower values reduce color saturation.")
+        .defaultValue(0.66)
+        .range(0.2, 1.0)
+        .sliderRange(0.2, 1.0)
+        .visible(vanillaBlend::get)
+        .build()
+    );
+
+    private final Setting<Integer> vanillaMaxAlpha = sgGeneral.add(new IntSetting.Builder()
+        .name("vanilla-max-alpha")
+        .description("Caps maximum StorageESP alpha in blend mode.")
+        .defaultValue(182)
+        .range(40, 255)
+        .sliderRange(40, 255)
+        .visible(vanillaBlend::get)
         .build()
     );
 
     private final Setting<SettingColor> chest = sgGeneral.add(new ColorSetting.Builder()
         .name("chest")
         .description("The color of chests.")
-        .defaultValue(new SettingColor(255, 160, 0, 255))
+        .defaultValue(new SettingColor(194, 152, 106, 220))
         .build()
     );
 
     private final Setting<SettingColor> trappedChest = sgGeneral.add(new ColorSetting.Builder()
         .name("trapped-chest")
         .description("The color of trapped chests.")
-        .defaultValue(new SettingColor(255, 0, 0, 255))
+        .defaultValue(new SettingColor(186, 102, 102, 220))
         .build()
     );
 
     private final Setting<SettingColor> barrel = sgGeneral.add(new ColorSetting.Builder()
         .name("barrel")
         .description("The color of barrels.")
-        .defaultValue(new SettingColor(255, 160, 0, 255))
+        .defaultValue(new SettingColor(178, 146, 112, 215))
         .build()
     );
 
     private final Setting<SettingColor> shulker = sgGeneral.add(new ColorSetting.Builder()
         .name("shulker")
         .description("The color of Shulker Boxes.")
-        .defaultValue(new SettingColor(255, 160, 0, 255))
+        .defaultValue(new SettingColor(168, 144, 182, 215))
         .build()
     );
 
     private final Setting<SettingColor> enderChest = sgGeneral.add(new ColorSetting.Builder()
         .name("ender-chest")
         .description("The color of Ender Chests.")
-        .defaultValue(new SettingColor(120, 0, 255, 255))
+        .defaultValue(new SettingColor(112, 126, 186, 220))
         .build()
     );
 
     private final Setting<SettingColor> other = sgGeneral.add(new ColorSetting.Builder()
         .name("other")
         .description("The color of furnaces, dispensers, droppers and hoppers.")
-        .defaultValue(new SettingColor(140, 140, 140, 255))
+        .defaultValue(new SettingColor(146, 152, 160, 210))
         .build()
     );
 
     private final Setting<Double> fadeDistance = sgGeneral.add(new DoubleSetting.Builder()
         .name("fade-distance")
         .description("The distance at which the color will fade.")
-        .defaultValue(6)
+        .defaultValue(8)
         .min(0)
         .sliderMax(12)
         .build()
@@ -178,26 +205,30 @@ public class StorageESP extends Module {
     private final Setting<SettingColor> openedColor = sgOpened.add(new ColorSetting.Builder()
         .name("opened-color")
         .description("Optional setting to change colors of opened chests, as opposed to not rendering. Disabled at zero opacity.")
-        .defaultValue(new SettingColor(203, 90, 203, 0))
+        .defaultValue(new SettingColor(188, 134, 188, 0))
         .build()
     );
 
     private Color lineColor = new Color(0, 0, 0, 0);
     private Color sideColor = new Color(0, 0, 0, 0);
-    
+
     private int count;
 
     private final MeshBuilder mesh;
     private final MeshBuilderVertexConsumerProvider vertexConsumerProvider;
-    
-    // 优化：缓存常用设置，减少重复get()调用
-    private List<BlockEntityType<?>> cachedStorageBlocks;
+
+    // 缓存当前帧常用设置，避免在渲染热路径重复读取 Setting / 线性查找
+    private Set<BlockEntityType<?>> cachedStorageBlockTypes = Set.of();
     private boolean cachedHideOpened;
     private int cachedFillOpacity;
     private double cachedFadeDistance;
     private boolean cachedTracers;
     private ShapeMode cachedShapeMode;
     private boolean cachedChestMinecarts;
+    private Mode cachedMode;
+    private boolean cachedVanillaBlend;
+    private double cachedVanillaSaturation;
+    private int cachedVanillaMaxAlpha;
 
     public StorageESP() {
         super(Categories.Render, "storage-esp", "Renders all specified storage blocks and minecarts.");
@@ -205,12 +236,10 @@ public class StorageESP extends Module {
         mesh = new MeshBuilder(MeteorRenderPipelines.WORLD_COLORED);
         vertexConsumerProvider = new MeshBuilderVertexConsumerProvider(mesh);
     }
-    
-    private boolean getBlockEntityColor(BlockEntity blockEntity) {
-        // 优化：快速检查方块类型是否在存储列表中
-        if (!cachedStorageBlocks.contains(blockEntity.getType())) return false;
 
-        // 优化：使用 instanceof 进行快速类型检查
+    private boolean getBlockEntityColor(BlockEntity blockEntity) {
+        if (!cachedStorageBlockTypes.contains(blockEntity.getType())) return false;
+
         if (blockEntity instanceof ChestBlockEntity) {
             lineColor.set(chest.get());
         } else if (blockEntity instanceof EnderChestBlockEntity) {
@@ -221,20 +250,51 @@ public class StorageESP extends Module {
             lineColor.set(barrel.get());
         } else if (blockEntity instanceof TrappedChestBlockEntity) {
             lineColor.set(trappedChest.get());
-        } else if (blockEntity instanceof AbstractFurnaceBlockEntity 
-              || blockEntity instanceof DispenserBlockEntity 
+        } else if (blockEntity instanceof AbstractFurnaceBlockEntity
+              || blockEntity instanceof DispenserBlockEntity
               || blockEntity instanceof HopperBlockEntity
-              || blockEntity instanceof BrewingStandBlockEntity 
-              || blockEntity instanceof ChiseledBookshelfBlockEntity 
-              || blockEntity instanceof CrafterBlockEntity 
+              || blockEntity instanceof BrewingStandBlockEntity
+              || blockEntity instanceof ChiseledBookshelfBlockEntity
+              || blockEntity instanceof CrafterBlockEntity
               || blockEntity instanceof DecoratedPotBlockEntity) {
             lineColor.set(other.get());
-        } 
+        }
         else {
             return false;
         }
 
         return true;
+    }
+
+    private void applyVanillaTone(Color color) {
+        if (!cachedVanillaBlend) return;
+
+        int gray = (color.r + color.g + color.b) / 3;
+        double s = cachedVanillaSaturation;
+        color.r = (int) MathHelper.lerp(s, gray, color.r);
+        color.g = (int) MathHelper.lerp(s, gray, color.g);
+        color.b = (int) MathHelper.lerp(s, gray, color.b);
+        color.a = Math.min(color.a, cachedVanillaMaxAlpha);
+    }
+
+    private void prepareColors(SettingColor baseColor) {
+        lineColor.set(baseColor);
+        applyVanillaTone(lineColor);
+
+        if (cachedShapeMode == ShapeMode.Sides || cachedShapeMode == ShapeMode.Both) {
+            sideColor.set(lineColor);
+            sideColor.a = cachedFillOpacity;
+            applyVanillaTone(sideColor);
+        } else {
+            sideColor.set(lineColor);
+            sideColor.a = 0;
+        }
+    }
+
+    private double getAlphaFactor(double distSq, double fadeDistSq) {
+        if (fadeDistSq <= 0) return 1.0;
+        if (distSq > fadeDistSq) return 1.0;
+        return distSq / fadeDistSq;
     }
 
     @Override
@@ -270,52 +330,54 @@ public class StorageESP extends Module {
     @EventHandler
     private void onRender(Render3DEvent event) {
         count = 0;
-        
-        // 优化：缓存常用设置，减少重复get()调用
-        cachedStorageBlocks = storageBlocks.get();
+
+        List<BlockEntityType<?>> storageBlockList = storageBlocks.get();
+        cachedStorageBlockTypes = storageBlockList instanceof Set<BlockEntityType<?>> set
+            ? set
+            : new ReferenceOpenHashSet<>(storageBlockList);
         cachedHideOpened = hideOpened.get();
         cachedFillOpacity = fillOpacity.get();
         cachedFadeDistance = fadeDistance.get();
         cachedTracers = tracers.get();
         cachedShapeMode = shapeMode.get();
         cachedChestMinecarts = chestMinecarts.get();
-        
-        boolean isShader = mode.get() == Mode.Shader;
-        double fadeDistSq = cachedFadeDistance * cachedFadeDistance;
-        int alphaThreshold = (int)(0.075 * 255); // 预计算透明度阈值
+        cachedMode = mode.get();
+        cachedVanillaBlend = vanillaBlend.get();
+        cachedVanillaSaturation = vanillaSaturation.get();
+        cachedVanillaMaxAlpha = vanillaMaxAlpha.get();
 
-        // 1. 渲染方块实体 (箱子、桶等)
+        boolean isShader = cachedMode == Mode.Shader;
+        double fadeDistSq = cachedFadeDistance * cachedFadeDistance;
+        SettingColor opened = openedColor.get();
+
         for (BlockEntity blockEntity : Utils.blockEntities()) {
             boolean interacted = interactedBlocks.contains(blockEntity.getPos());
             if (interacted && cachedHideOpened) continue;
 
             if (!getBlockEntityColor(blockEntity)) continue;
 
-            if (interacted && openedColor.get().a > 0) {
-                lineColor.set(openedColor.get());
+            if (interacted && opened.a > 0) {
+                lineColor.set(opened);
             }
+
+            applyVanillaTone(lineColor);
 
             if (cachedShapeMode == ShapeMode.Sides || cachedShapeMode == ShapeMode.Both) {
                 sideColor.set(lineColor);
                 sideColor.a = cachedFillOpacity;
+                applyVanillaTone(sideColor);
+            } else {
+                sideColor.a = 0;
             }
 
-            // 优化：预计算位置和使用更高效的距离计算
             double blockX = blockEntity.getPos().getX() + 0.5;
             double blockY = blockEntity.getPos().getY() + 0.5;
             double blockZ = blockEntity.getPos().getZ() + 0.5;
-            double dist = PlayerUtils.squaredDistanceTo(blockX, blockY, blockZ);
-            
-            // 优化：更高效的透明度计算
-            double alphaFactor;
-            if (dist > fadeDistSq) {
-                alphaFactor = 1.0;
-            } else {
-                alphaFactor = dist / fadeDistSq;
-                if (alphaFactor < 0.075) continue; // 早期退出
-            }
+            double distSq = PlayerUtils.squaredDistanceTo(blockX, blockY, blockZ);
 
-            // 懒加载开启 Mesh
+            double alphaFactor = getAlphaFactor(distSq, fadeDistSq);
+            if (alphaFactor < 0.075) continue;
+
             if (count == 0 && isShader) {
                 mesh.begin();
             }
@@ -326,11 +388,11 @@ public class StorageESP extends Module {
             sideColor.a = (int)(sideColor.a * alphaFactor);
 
             if (cachedTracers) {
-                event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, 
+                event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                     blockX, blockY, blockZ, lineColor);
             }
 
-            if (mode.get() == Mode.Box) {
+            if (cachedMode == Mode.Box) {
                 renderBox(event, blockEntity);
             } else if (isShader) {
                 renderShader(event, blockEntity);
@@ -342,30 +404,17 @@ public class StorageESP extends Module {
             count++;
         }
 
-        // 2. 渲染箱子矿车
-        if (cachedChestMinecarts && mc.world != null) {
-            for (Entity entity : mc.world.getEntities()) {
+        if (cachedChestMinecarts && mc.world != null && mc.player != null) {
+            Box queryBox = mc.player.getBoundingBox().expand(Utils.getRenderDistance() * 16.0 + 16.0);
+            for (Entity entity : mc.world.getOtherEntities(null, queryBox, entity -> entity instanceof ChestMinecartEntity)) {
                 if (entity instanceof ChestMinecartEntity minecart) {
-                    lineColor.set(chest.get());
+                    prepareColors(chest.get());
 
-                    if (cachedShapeMode == ShapeMode.Sides || cachedShapeMode == ShapeMode.Both) {
-                        sideColor.set(lineColor);
-                        sideColor.a = cachedFillOpacity;
-                    }
+                    double distSq = PlayerUtils.squaredDistanceTo(minecart.getX(), minecart.getY(), minecart.getZ());
 
-                    // 优化：直接计算距离，避免重复调用
-                    double dist = PlayerUtils.squaredDistanceTo(minecart.getX(), minecart.getY(), minecart.getZ());
-                    
-                    // 优化：相同的透明度计算优化
-                    double alphaFactor;
-                    if (dist > fadeDistSq) {
-                        alphaFactor = 1.0;
-                    } else {
-                        alphaFactor = dist / fadeDistSq;
-                        if (alphaFactor < 0.075) continue; // 早期退出
-                    }
+                    double alphaFactor = getAlphaFactor(distSq, fadeDistSq);
+                    if (alphaFactor < 0.075) continue;
 
-                    // 懒加载开启 Mesh (如果之前方块实体循环没开过)
                     if (count == 0 && isShader) {
                         mesh.begin();
                     }
@@ -376,7 +425,7 @@ public class StorageESP extends Module {
                     sideColor.a = (int)(sideColor.a * alphaFactor);
 
                     if (cachedTracers) {
-                        event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z, 
+                        event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                             minecart.getX(), minecart.getY(), minecart.getZ(), lineColor);
                     }
 
@@ -384,7 +433,7 @@ public class StorageESP extends Module {
                     double x = MathHelper.lerp(event.tickDelta, minecart.lastRenderX, minecart.getX()) - minecart.getX();
                     double y = MathHelper.lerp(event.tickDelta, minecart.lastRenderY, minecart.getY()) - minecart.getY();
                     double z = MathHelper.lerp(event.tickDelta, minecart.lastRenderZ, minecart.getZ()) - minecart.getZ();
-                    
+
                     Box box = minecart.getBoundingBox();
                     event.renderer.box(x + box.minX, y + box.minY, z + box.minZ, x + box.maxX, y + box.maxY, z + box.maxZ, sideColor, lineColor, cachedShapeMode, 0);
 
@@ -396,7 +445,7 @@ public class StorageESP extends Module {
             }
         }
 
-      if (mode.get() == Mode.Shader && count > 0) {
+        if (cachedMode == Mode.Shader && count > 0) {
             MeshRenderer.begin()
                 .attachments(PostProcessShaders.STORAGE_OUTLINE.framebuffer)
                 .clearColor(Color.CLEAR)
@@ -407,7 +456,7 @@ public class StorageESP extends Module {
             PostProcessShaders.STORAGE_OUTLINE.render();
         }
     }
-    
+
     private void renderBox(Render3DEvent event, BlockEntity blockEntity) {
         double x1 = blockEntity.getPos().getX();
         double y1 = blockEntity.getPos().getY();
