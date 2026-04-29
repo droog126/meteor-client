@@ -12,92 +12,86 @@ import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.entity.Entity;
-import org.lwjgl.glfw.GLFW;
 
-import java.util.Random;
+import org.lwjgl.glfw.GLFW;
 
 public class UltimateSprint extends Module {
     public static UltimateSprint instance;
-
-    // 状态控制
-    private boolean externalRequest = false;
-    private Runnable externalCallback = null;
-    private int currentDelayTicks = 0;
-
-    private int currentRandomTarget = 0;
-    private final Random random = new Random();
-
-    private final SettingGroup sgGeneral = settings.getDefaultGroup();
-
-    // ==================== 设置项 ====================
-
-    private final Setting<Integer> minDelay = sgGeneral.add(new IntSetting.Builder()
-            .name("min-delay")
-            .description("最小延迟 Tick (Grim建议2)")
-            .defaultValue(2)
-            .min(0).max(10).build());
-
-    private final Setting<Integer> maxDelay = sgGeneral.add(new IntSetting.Builder()
-            .name("max-delay")
-            .description("最大延迟 Tick (Grim建议3)")
-            .defaultValue(3)
-            .min(0).max(10).build());
-
-    private final Setting<Boolean> needRestoreSprint = sgGeneral.add(new BoolSetting.Builder()
-            .name("need-restore-sprint")
-            .description("攻击完成后是否自动恢复疾跑按键状态")
-            .defaultValue(true)
-            .build());
-
-    private final Setting<Boolean> needReCheck = sgGeneral.add(new BoolSetting.Builder()
-            .name("need-re-check")
-            .description("攻击完成后是否需要重新检查目标是否存活")
-            .defaultValue(true)
-            .build());
 
     public UltimateSprint() {
         super(Categories.Movement, "ultimate-sprint", "Smart W-Tap: Handles attack callbacks with configurable delay.");
     }
 
+    // ========== 原有 Crit Unsprint 状态 ==========
+    private Runnable externalCallback = null;
+    private int currentDelayTicks = 0;
+
+    // ========== 新增：W-Tap 状态 ==========
+    private Runnable wtapCallback = null;
+    private int wtapTicks = 0;
+    private boolean wtapActive = false;
+    // =======================================
+
     @Override
     public void onActivate() {
         instance = this;
         resetRequests();
+        resetWtap();
     }
 
     @Override
     public void onDeactivate() {
         resetRequests();
+        resetWtap();
         instance = null;
     }
 
     private void resetRequests() {
-        externalRequest = false;
+        if (externalCallback != null) {
+            if (getTarget() != null) {
+                externalCallback.run();
+            }
+        }
         externalCallback = null;
         currentDelayTicks = 0;
     }
 
-    public static void requestCritUnsprint(Runnable callback) {
-        if (instance != null && !instance.externalRequest) {
-            instance.externalRequest = true;
-            instance.externalCallback = callback;
-            instance.currentDelayTicks = 0;
+    // ========== 新增：W-Tap 重置 ==========
+    private void resetWtap() {
+        if (wtapCallback != null) {
+            wtapCallback.run();
+        }
+        wtapCallback = null;
+        wtapTicks = 0;
+        wtapActive = false;
+    }
+    // =======================================
 
-            if (instance.mc.player != null && !instance.mc.player.isSprinting()) {
-                instance.currentRandomTarget = 0;
-            } else {
-                int min = instance.minDelay.get();
-                int max = instance.maxDelay.get();
-                if (min > max) { int t = min; min = max; max = t; } 
-                
-                instance.currentRandomTarget = min + instance.random.nextInt(max - min + 1);
-            }
+    public static void requestCritUnsprint(Runnable callback) {
+        if (instance != null) {
+            instance.externalCallback = callback;
+            boolean isPressW = Input.isKeyPressed(GLFW.GLFW_KEY_W);
+
+            instance.currentDelayTicks = isPressW ? 1 : 0;
         }
     }
 
     public static void clearCritUnsprintRequest() {
         if (instance != null) {
             instance.resetRequests();
+        }
+    }
+
+    public static void requestWSprint() {
+        if (instance != null && !instance.wtapActive) {
+            instance.wtapActive = true;
+            instance.wtapTicks = 0;
+        }
+    }
+
+    public static void clearWSprintRequest() {
+        if (instance != null) {
+            instance.resetWtap();
         }
     }
 
@@ -117,68 +111,56 @@ public class UltimateSprint extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.world == null)
             return;
+        boolean isPressW = Input.isKeyPressed(GLFW.GLFW_KEY_W);
+        if (wtapActive) {
+            wtapTicks++;
+            if (wtapTicks > 1) {
+                wtapActive = false;
+                wtapTicks = 0;
+            } else {
+                stopSprinting();
+                mc.options.backKey.setPressed(true);
+                return;
+            }
+        }
 
-        if (mc.currentScreen == null) {
-            mc.options.forwardKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_W));
+        if (externalCallback != null) {
+            if (currentDelayTicks <= 0) {
+                resetRequests();
+            } else {
+                currentDelayTicks--;
+                stopSprinting();
+                return;
+            }
+        }
+
+        if (externalCallback == null && !wtapActive) {
+            if (isPressW) {
+                startSprinting();
+            }else{
+                stopSprinting();
+            }
             mc.options.backKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_S));
             mc.options.leftKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_A));
             mc.options.rightKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_D));
-        } else {
-            setMovingKeys(false);
-            return;
-        }
-
-        if (externalRequest && externalCallback != null) {
-            mc.options.sprintKey.setPressed(false);
-            if (mc.player.isSprinting()) {
-                mc.player.setSprinting(false);
-            }
-
-            if (currentDelayTicks < currentRandomTarget) {
-                currentDelayTicks++;
-                return; 
-            } else {
-                if (needReCheck.get() && getTarget() == null) {
-                    resetRequests(); 
-                } else {
-                    try {
-                        externalCallback.run();
-                    } catch (Exception e) {
-                        e.printStackTrace(); 
-                    }
-                    resetRequests(); 
-                }
-            }
-        }
-
-        if (needRestoreSprint.get()) {
-            boolean forward = mc.options.forwardKey.isPressed();
-            boolean back = mc.options.backKey.isPressed();
-
-            if (mc.player.getHungerManager() != null) {
-                boolean canSprint = forward && !back
-                        && !mc.player.isSneaking()
-                        && !mc.player.horizontalCollision
-                        && mc.player.getHungerManager().getFoodLevel() > 6;
-
-                if (canSprint) {
-                    mc.options.sprintKey.setPressed(true);
-                } else {
-                    mc.options.sprintKey.setPressed(false);
-                }
-            }
         }
     }
 
-    private void setMovingKeys(boolean pressed) {
-        mc.options.forwardKey.setPressed(pressed);
-        mc.options.backKey.setPressed(pressed);
-        mc.options.leftKey.setPressed(pressed);
-        mc.options.rightKey.setPressed(pressed);
-        mc.options.sprintKey.setPressed(pressed);
+    private void stopSprinting() {
+        mc.options.sprintKey.setPressed(false);
+        mc.options.forwardKey.setPressed(false);
     }
 
-    public boolean rageSprint() { return false; }
-    public boolean unsprintInWater() { return false; }
-    public boolean stopSprinting() { return !isActive(); }
+    private void startSprinting() {
+        mc.options.sprintKey.setPressed(true);
+        mc.options.forwardKey.setPressed(true);
+    }
+
+    public boolean rageSprint() {
+        return false;
+    }
+
+    public boolean unsprintInWater() {
+        return false;
+    }
 }
