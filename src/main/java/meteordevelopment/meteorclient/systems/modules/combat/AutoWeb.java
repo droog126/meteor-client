@@ -13,6 +13,7 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.Item;
@@ -25,10 +26,41 @@ import net.minecraft.util.math.*;
 import net.minecraft.world.RaycastContext;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class AutoWeb extends Module {
 
+    // ── 触发模式 ──────────────────────────────────────────────────────────────
+
     private enum TriggerMode { HOLD, ALWAYS }
+
+    // ── 候选放置点动作类型 ────────────────────────────────────────────────────
+
+    /** 候选放置点的期望动作：放网或放岩浆 */
+    private enum PlaceType { WEB, LAVA }
+
+    /**
+     * 单个候选放置点，携带所有决策所需信息。
+     * priority 越高越优先处理。
+     */
+    private static class PlaceCandidate {
+        final BlockPos        pos;
+        final List<Direction> faces;
+        final PlaceType       type;
+        final LivingEntity    source;   // 产生这个候选点的目标实体
+        final int             priority; // 越大越优先
+
+        PlaceCandidate(BlockPos pos, List<Direction> faces,
+                       PlaceType type, LivingEntity source, int priority) {
+            this.pos      = pos;
+            this.faces    = faces;
+            this.type     = type;
+            this.source   = source;
+            this.priority = priority;
+        }
+    }
+
+    // ── Settings ──────────────────────────────────────────────────────────────
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender  = settings.createGroup("Render");
@@ -48,8 +80,8 @@ public class AutoWeb extends Module {
 
     private final Setting<Double> targetRange = sgGeneral.add(new DoubleSetting.Builder()
         .name("target-range")
-        .description("目标放置/收集的作用距离")
-        .defaultValue(7).min(1).max(12)
+        .description("扫描目标 + 放置作用距离")
+        .defaultValue(10).min(1).max(20)
         .build());
 
     private final Setting<Double> fluidRange = sgGeneral.add(new DoubleSetting.Builder()
@@ -63,19 +95,22 @@ public class AutoWeb extends Module {
         .defaultValue(3).min(0).max(20)
         .build());
 
-    private final Setting<Integer> predictTicks = sgGeneral.add(new IntSetting.Builder()
-        .name("predict-ticks")
-        .description("对目标移动进行预测的tick数")
-        .defaultValue(2).min(0).max(10)
-        .build());
+
 
     private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
         .name("debug")
-        .description("在聊天框输出详细的判断和放置日志，用于排查放不出的原因")
+        .description("在聊天框输出详细日志")
         .defaultValue(true)
         .build());
 
-    // Render colors
+    private final Setting<Boolean> debug2 = sgGeneral.add(new BoolSetting.Builder()
+        .name("debug2")
+        .description("开启后渲染所有候选放置面")
+        .defaultValue(false)
+        .build());
+
+    // ── 渲染颜色 ──────────────────────────────────────────────────────────────
+
     private final Setting<SettingColor> webColor       = sgRender.add(new ColorSetting.Builder().name("web-color").defaultValue(new SettingColor(0, 200, 255, 40)).build());
     private final Setting<SettingColor> webLine        = sgRender.add(new ColorSetting.Builder().name("web-line").defaultValue(new SettingColor(0, 200, 255, 255)).build());
     private final Setting<SettingColor> lavaColor      = sgRender.add(new ColorSetting.Builder().name("lava-color").defaultValue(new SettingColor(255, 80, 0, 40)).build());
@@ -87,77 +122,59 @@ public class AutoWeb extends Module {
     private final Setting<SettingColor> fluidLavaColor = sgRender.add(new ColorSetting.Builder().name("fluid-lava-color").defaultValue(new SettingColor(255, 60, 0, 40)).build());
     private final Setting<SettingColor> fluidLavaLine  = sgRender.add(new ColorSetting.Builder().name("fluid-lava-line").defaultValue(new SettingColor(255, 60, 0, 255)).build());
 
-    // ── State ─────────────────────────────────────────────────────────────────
+    // ── 运行时状态 ────────────────────────────────────────────────────────────
 
-    private final List<BlockPos> webRenderPos  = new ArrayList<>();
-    private final Map<BlockPos, List<Direction>> webRenderFaces  = new HashMap<>();
-    private final List<BlockPos> lavaRenderPos = new ArrayList<>();
-    private final Map<BlockPos, List<Direction>> lavaRenderFaces = new HashMap<>();
-    private final List<BlockPos> fluidRenderPos = new ArrayList<>();
+    /** 本 tick 所有候选放置点（按 priority 降序排列） */
+    private final List<PlaceCandidate> allCandidates = new ArrayList<>();
 
-    // FIX 1: Split aimed tracking so web and lava can independently be "aimed"
+    /** 当前瞄准的 web / lava 候选点（渲染高亮用） */
     private BlockPos aimedWebPos  = null;
     private BlockPos aimedLavaPos = null;
     private BlockPos aimedFluid   = null;
 
-    // Keep a unified aimedPos/aimedIsWeb for action logic (derived from the above)
-    private BlockPos aimedPos   = null;
-    private boolean  aimedIsWeb = false;
+    /** 统一行动逻辑用的字段（从上面两个派生） */
+    private PlaceCandidate aimedCandidate = null;
 
-    private int cd = 0;
-    private LivingEntity lockedTarget = null;
+    /** 液体渲染列表 */
+    private final List<BlockPos> fluidRenderPos = new ArrayList<>();
 
+    private int     cd            = 0;
     private int     prevSlot      = -1;
     private int     swapBackTimer = 0;
     private boolean wasTriggered  = false;
 
-    private enum ActionType { NONE, PLACE_WEB, PLACE_LAVA, SCOOP_WATER, SCOOP_LAVA, PLACE_WATER_FOR_BUCKET }
+    // 水桶二步骤状态
     private enum WaterPlaceState { NONE, PLACED }
-
     private WaterPlaceState waterPlaceState = WaterPlaceState.NONE;
-    private BlockPos pendingScoopPos = null;
+    private BlockPos        pendingScoopPos = null;
+
+    // ── 构造 ──────────────────────────────────────────────────────────────────
 
     public AutoWeb() {
-        super(Categories.Combat, "auto-web", "Legal cobweb / lava placement.");
+        super(Categories.Combat, "auto-web", "Multi-target cobweb / lava placement.");
     }
 
-    @Override
-    public void onActivate() {
-        if (debug.get()) info("模块已开启。等待目标锁定...");
+    @Override public void onActivate()   { if (debug.get()) info("模块已开启，开始扫描范围内所有目标。"); }
+    @Override public void onDeactivate() {
+        clearState();
+        prevSlot = -1; swapBackTimer = 0; wasTriggered = false;
+        waterPlaceState = WaterPlaceState.NONE; pendingScoopPos = null;
+        if (debug.get()) info("模块已关闭。");
     }
 
-    @Override
-    public void onDeactivate() {
-        lockedTarget = null;
-        clearRender();
-        prevSlot = -1;
-        swapBackTimer = 0;
-        wasTriggered = false;
-        waterPlaceState = WaterPlaceState.NONE;
-        pendingScoopPos = null;
-        if (debug.get()) info("模块已关闭。清空所有状态。");
-    }
-
-    private void clearRender() {
-        webRenderPos.clear();
-        webRenderFaces.clear();
-        lavaRenderPos.clear();
-        lavaRenderFaces.clear();
+    private void clearState() {
+        allCandidates.clear();
         fluidRenderPos.clear();
-        // FIX 1: Clear both independent aimed positions
-        aimedWebPos  = null;
-        aimedLavaPos = null;
-        aimedPos     = null;
-        aimedIsWeb   = false;
-        aimedFluid   = null;
+        aimedWebPos = null; aimedLavaPos = null; aimedFluid = null; aimedCandidate = null;
     }
 
-    // ── Tick ──────────────────────────────────────────────────────────────────
+    // ── Tick 主循环 ───────────────────────────────────────────────────────────
 
     @EventHandler
     private void onTick(TickEvent.Pre e) {
         if (mc.player == null || mc.world == null) return;
 
+        // 换格倒计时
         if (swapBackTimer > 0) {
             swapBackTimer--;
             if (swapBackTimer == 0 && prevSlot != -1) {
@@ -165,145 +182,378 @@ public class AutoWeb extends Module {
                 prevSlot = -1;
             }
         }
-
         if (cd > 0) cd--;
 
-        boolean holdMode  = triggerMode.get() == TriggerMode.HOLD;
-        boolean triggered = !holdMode || activateBind.get().isPressed();
+        boolean triggered = triggerMode.get() == TriggerMode.ALWAYS
+                         || activateBind.get().isPressed();
 
-        clearRender();
-        updateTarget();
+        // ── 每 tick 全量重建候选列表 ─────────────────────────────────────────
+        clearState();
         scanNearbyFluids();
+        buildAllCandidates(); // 扫描范围内所有目标
 
-        if (lockedTarget != null && lockedTarget.isAlive()
-                && lockedTarget.distanceTo(mc.player) <= targetRange.get()) {
-            buildPlaceable(lockedTarget);
-        } else {
-            lockedTarget = null;
-        }
+        // ── 瞄准点检测 ───────────────────────────────────────────────────────
+        aimedFluid    = getLookedFluidPos();
+        aimedWebPos   = getLookedCandidatePos(PlaceType.WEB);
+        aimedLavaPos  = getLookedCandidatePos(PlaceType.LAVA);
 
-        // FIX 1: Track aimed pos independently for web and lava
-        aimedFluid   = getLookedFluidPos();
-        aimedWebPos  = getLookedPlacePos(webRenderPos);
-        aimedLavaPos = getLookedPlacePos(lavaRenderPos);
+        // 瞄准候选对象（供动作逻辑用）：优先 lava aim（因为 lava > web in action priority），
+        // 但如果没有 lava aim 才退到 web aim。
+        aimedCandidate = findCandidate(aimedLavaPos, PlaceType.LAVA);
+        if (aimedCandidate == null) aimedCandidate = findCandidate(aimedWebPos, PlaceType.WEB);
 
-        // For action logic: prefer web over lava if both aimed (web takes priority)
-        if (aimedWebPos != null) {
-            aimedPos   = aimedWebPos;
-            aimedIsWeb = true;
-        } else if (aimedLavaPos != null) {
-            aimedPos   = aimedLavaPos;
-            aimedIsWeb = false;
-        } else {
-            aimedPos   = null;
-            aimedIsWeb = false;
-        }
-
-        if (wasTriggered && !triggered) {
-            if (prevSlot != -1) {
-                mc.player.getInventory().setSelectedSlot(prevSlot);
-                prevSlot = -1;
-                swapBackTimer = 0;
+        // Debug：显示瞄准位置得分 & 优先结果
+        if (debug.get() && triggered) {
+            // 空桶液体瞄准检测
+            boolean hasBucket = hasInHotbar(Items.BUCKET);
+            if (aimedFluid != null) {
+                Fluid f = mc.world.getBlockState(aimedFluid).getFluidState().getFluid();
+                boolean isSource = mc.world.getBlockState(aimedFluid).getFluidState().isStill();
+                String fluidName = (f == Fluids.WATER) ? "水" : (f == Fluids.LAVA) ? "岩浆" : "未知";
+                if (isSource && hasBucket) {
+                    info("[瞄准-液体] 位置: " + aimedFluid.toShortString()
+                        + " | 液体: " + fluidName
+                        + " | 得分: 999 (空桶优先)");
+                } else {
+                    info("[瞄准-液体] 位置: " + aimedFluid.toShortString()
+                        + " | 液体: " + fluidName + (isSource ? "" : "(非母体)")
+                        + " | 得分: -1 (不放置)");
+                }
             }
+            if (aimedCandidate != null) {
+                info("[瞄准] 位置: " + aimedCandidate.pos.toShortString()
+                    + " | 类型: " + aimedCandidate.type
+                    + " | 得分: " + aimedCandidate.priority);
+            } else {
+                info("[瞄准] 位置: 无 | 类型: 无 | 得分: -1 (不放置)");
+            }
+            if (!allCandidates.isEmpty()) {
+                PlaceCandidate best = allCandidates.get(0);
+                info("[优先] 位置: " + best.pos.toShortString()
+                    + " | 类型: " + best.type
+                    + " | 得分: " + best.priority
+                    + " | 目标: " + (best.source != null ? best.source.getName().getString() : "null"));
+            } else {
+                info("[优先] 位置: 无 | 类型: 无 | 得分: -1 (不放置)");
+            }
+        }
+
+        // 松键时换回
+        if (wasTriggered && !triggered && prevSlot != -1) {
+            mc.player.getInventory().setSelectedSlot(prevSlot);
+            prevSlot = -1; swapBackTimer = 0;
         }
         wasTriggered = triggered;
 
-        if (!triggered) return;
-        if (cd > 0) return;
+        if (!triggered || cd > 0) return;
 
-        Item mainHand = mc.player.getMainHandStack().getItem();
+        // ── 执行动作 ─────────────────────────────────────────────────────────
+        executeAction();
+    }
 
-        boolean canWeb         = hasInHotbar(Items.COBWEB);
-        boolean canLava        = hasInHotbar(Items.LAVA_BUCKET);
-        boolean canBucket      = hasInHotbar(Items.BUCKET);
-        boolean canWaterBucket = hasInHotbar(Items.WATER_BUCKET);
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  多目标扫描 & 优先级计算
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * 扫描范围内所有玩家，为每个目标建立候选放置点。
+     *
+     * 优先级分数规则（越大越优先处理）：
+     *   被网住  → priority 100  (LAVA 烧网)
+     *   着火    → priority 50   (WEB)
+     *   在空中  → priority 60   (WEB)
+     *   在地面  → priority 50   (LAVA)
+     *   距离越近 → priority += (range - dist) * 2  (近的稍微加分)
+     *
+     * 库存覆盖规则：
+     *   只有岩浆桶，没有蜘蛛网 → 所有目标强制 LAVA（无视空中逻辑）
+     *   只有蜘蛛网，没有岩浆桶 → 所有目标强制 WEB
+     */
+    private void buildAllCandidates() {
+        boolean hasWeb  = hasInHotbar(Items.COBWEB);
+        boolean hasLava = hasInHotbar(Items.LAVA_BUCKET);
+        // 只有岩浆无网 → 强制 LAVA；只有网无岩浆 → 强制 WEB
+        boolean forceLava = hasLava && !hasWeb;
+        boolean forceWeb  = hasWeb  && !hasLava;
+
+        Vec3d eye = mc.player.getEyePos();
+        double range = targetRange.get();
+
+        for (PlayerEntity entity : mc.world.getEntitiesByClass(
+                PlayerEntity.class,
+                mc.player.getBoundingBox().expand(range),
+                e -> isValidTarget(e, range))) {
+
+            // ── 判断这个目标的首选动作类型 ──────────────────────────────────
+            boolean inCobweb = isInCobweb(entity);
+            boolean onFire   = entity.isOnFire();
+            boolean inAir    = !isOnGround(entity);
+
+            PlaceType preferredType;
+            int basePriority;
+
+            if (inCobweb) {
+                // 被网住 → 岩浆最优先
+                preferredType = PlaceType.LAVA;
+                basePriority  = 100;
+            } else if (onFire) {
+                // 着火 → Web
+                preferredType = PlaceType.WEB;
+                basePriority  = 50;
+            } else if (inAir) {
+                // 空中 → Web（除非强制岩浆）
+                preferredType = forceLava ? PlaceType.LAVA : PlaceType.WEB;
+                basePriority  = forceLava ? 55 : 60;
+            } else {
+                // 地面 → LAVA（除非强制Web）
+                preferredType = forceWeb ? PlaceType.WEB : PlaceType.LAVA;
+                basePriority  = forceWeb ? 45 : 50;
+            }
+
+            // 强制覆盖
+            if (forceWeb  && !inCobweb && !onFire) preferredType = PlaceType.WEB;
+            // forceLava 已在上面处理
+
+            // 距离加分（最多 +14）
+            double dist = entity.distanceTo(mc.player);
+            int priority = basePriority + (int) ((range - dist) * 2);
+
+            // ── 使用该目标当前位置 ────────────────────────────────────────────
+            BlockPos base = entity.getBlockPos();
+
+            // ── 为该目标建立放置候选点 ────────────────────────────────────────
+            buildCandidatesForTarget(entity, base, preferredType, priority, inCobweb);
+        }
+
+        // 按 priority 降序排列，相同 priority 按距离玩家眼睛升序
+        allCandidates.sort(Comparator
+            .comparingInt((PlaceCandidate c) -> c.priority).reversed()
+            .thenComparingDouble(c -> Vec3d.ofCenter(c.pos).squaredDistanceTo(eye)));
+
+        if (debug.get() && !allCandidates.isEmpty()) {
+            info("扫描到 " + allCandidates.size() + " 个候选放置点，最高优先级: "
+                + allCandidates.get(0).priority
+                + " (" + allCandidates.get(0).type + ")"
+                + " @ " + allCandidates.get(0).pos.toShortString());
+        }
+    }
+
+    /**
+     * 为单个目标建立所有候选放置点（脚部 2×2 + 被网时的额外3个岩浆点）。
+     */
+    private void buildCandidatesForTarget(LivingEntity entity, BlockPos base,
+                                          PlaceType type, int priority, boolean inCobweb) {
+        boolean noFluidRestriction = (type == PlaceType.LAVA);
+
+        for (BlockPos pos : getFootQuad(base)) {
+            if (type == PlaceType.WEB) {
+                tryAddCandidate(pos, PlaceType.WEB, entity, priority, inCobweb, false);
+            } else {
+                tryAddCandidate(pos, PlaceType.LAVA, entity, priority, inCobweb, noFluidRestriction);
+            }
+            // 始终为另一种类型生成次级候选（优先级减半，颜色会区分）
+            if (type == PlaceType.WEB) {
+                tryAddCandidate(pos, PlaceType.LAVA, entity, priority / 2, inCobweb, true);
+            } else {
+                tryAddCandidate(pos, PlaceType.WEB, entity, priority / 2, inCobweb, inCobweb);
+            }
+        }
+
+        // 被网住时：额外3个岩浆候选（上方 + 最近2个侧面）
+        if (inCobweb) {
+            addCobwebLavaCandidates(entity, priority, base);
+        }
+    }
+
+    private void tryAddCandidate(BlockPos pos, PlaceType type, LivingEntity source,
+                                 int priority, boolean allowCobwebSupport, boolean noFluidRestriction) {
+        // 有效性检查
+        if (type == PlaceType.WEB  && !isValidForWeb(pos))             return;
+        if (type == PlaceType.LAVA && !isValidForLava(pos, noFluidRestriction)) return;
+
+        List<Direction> faces = (type == PlaceType.WEB)
+            ? bestFacesForWeb(pos, allowCobwebSupport)
+            : bestFacesForLava(pos);
+        if (faces.isEmpty()) return;
+
+        // 岩浆额外加分：不存在玩家的面 → +1分
+        if (type == PlaceType.LAVA) {
+            for (Direction d : Direction.values()) {
+                BlockPos neighbor = pos.offset(d);
+                boolean hasPlayer = false;
+                for (PlayerEntity p : mc.world.getPlayers()) {
+                    if (p == mc.player) continue;
+                    if (p.getBlockPos().equals(neighbor) ||
+                        BlockPos.ofFloored(p.getX(), p.getY() + 1, p.getZ()).equals(neighbor)) {
+                        hasPlayer = true;
+                        break;
+                    }
+                }
+                if (!hasPlayer) priority += 1;
+            }
+        }
+
+        // 去重：如果同一个 pos + type 已存在，保留 priority 更高的那个
+        for (int i = 0; i < allCandidates.size(); i++) {
+            PlaceCandidate existing = allCandidates.get(i);
+            if (existing.pos.equals(pos) && existing.type == type) {
+                if (priority > existing.priority) {
+                    allCandidates.set(i, new PlaceCandidate(pos, faces, type, source, priority));
+                }
+                return;
+            }
+        }
+        allCandidates.add(new PlaceCandidate(pos, faces, type, source, priority));
+    }
+
+    /**
+     * 被网住时额外添加：蜘蛛网上方 + 距玩家最近的2个水平侧面。
+     */
+    private void addCobwebLavaCandidates(LivingEntity entity, int priority, BlockPos base) {
+        BlockPos webPos = null;
+        if (mc.world.getBlockState(entity.getBlockPos()).isOf(Blocks.COBWEB)) {
+            webPos = entity.getBlockPos();
+        } else {
+            BlockPos head = BlockPos.ofFloored(entity.getX(), entity.getY() + 1, entity.getZ());
+            if (mc.world.getBlockState(head).isOf(Blocks.COBWEB)) webPos = head;
+        }
+        if (webPos == null) return;
+
+        Vec3d playerEye = mc.player.getEyePos();
+        int cobwebPriority = priority + 20; // 蜘蛛网上的岩浆点额外加分
+
+        // 上方
+        BlockPos above = webPos.up();
+        if (isValidForLava(above, true)) {
+            List<Direction> faces = new ArrayList<>();
+            faces.add(Direction.UP);
+            // 去重判断
+            boolean dup = false;
+            for (PlaceCandidate c : allCandidates) {
+                if (c.pos.equals(above) && c.type == PlaceType.LAVA) { dup = true; break; }
+            }
+            if (!dup) allCandidates.add(new PlaceCandidate(above, faces, PlaceType.LAVA, entity, cobwebPriority));
+        }
+
+        // 最近2个水平侧面
+        final BlockPos finalWebPos = webPos;
+        List<Direction> horizontals = Arrays.asList(
+            Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST);
+        horizontals.sort(Comparator.comparingDouble(
+            d -> Vec3d.ofCenter(finalWebPos.offset(d)).squaredDistanceTo(playerEye)));
+
+        int added = 0;
+        for (Direction d : horizontals) {
+            if (added >= 2) break;
+            BlockPos sidePos = webPos.offset(d);
+            if (!isValidForLava(sidePos, true)) continue;
+            if (Vec3d.ofCenter(webPos).distanceTo(playerEye) > targetRange.get()) continue;
+
+            Direction supportFace = d.getOpposite();
+            boolean dup = false;
+            for (PlaceCandidate c : allCandidates) {
+                if (c.pos.equals(sidePos) && c.type == PlaceType.LAVA) { dup = true; break; }
+            }
+            if (!dup) {
+                List<Direction> faces = new ArrayList<>();
+                faces.add(supportFace);
+                allCandidates.add(new PlaceCandidate(sidePos, faces, PlaceType.LAVA, entity, cobwebPriority));
+            }
+            added++;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  动作执行
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * 动作优先级（高 → 低）：
+     *   1. 空桶收水（最高，不论任何情况）
+     *   2. 水桶放水换空桶（次之）
+     *   3. 空桶收岩浆
+     *   4. 手持物匹配 aimedCandidate → 直接放
+     *   5. 按 allCandidates 优先级列表顺序，取第一个有对应物品的候选点放置
+     */
+    private void executeAction() {
+        boolean hasLava        = hasInHotbar(Items.LAVA_BUCKET);
+        boolean hasWeb         = hasInHotbar(Items.COBWEB);
+        boolean hasBucket      = hasInHotbar(Items.BUCKET);
+        boolean hasWaterBucket = hasInHotbar(Items.WATER_BUCKET);
 
         boolean isWaterAimed = aimedFluid != null && isWaterSource(aimedFluid);
         boolean isLavaAimed  = aimedFluid != null && isLavaSource(aimedFluid);
 
-        // Check if the aimed placement position has a cobweb support
-        boolean aimOnCobweb = false;
-        if (aimedPos != null) {
-            Map<BlockPos, List<Direction>> faceMap = aimedIsWeb ? webRenderFaces : lavaRenderFaces;
-            Direction face = getBestFace(aimedPos, faceMap);
-            if (face != null) {
-                BlockPos support = aimedPos.offset(face.getOpposite());
-                aimOnCobweb = mc.world.getBlockState(support).isOf(Blocks.COBWEB);
-            }
-        }
-
-        ActionType action = ActionType.NONE;
-
+        // 0. 等待收水二步骤
         if (waterPlaceState == WaterPlaceState.PLACED && pendingScoopPos != null) {
-            if (isWaterSource(pendingScoopPos) && canBucket) {
-                aimedFluid = pendingScoopPos;
-                action = ActionType.SCOOP_WATER;
+            if (isWaterSource(pendingScoopPos) && hasBucket) {
+                scoopFluid(pendingScoopPos, "收水(二步)");
+                waterPlaceState = WaterPlaceState.NONE; pendingScoopPos = null;
             } else {
-                waterPlaceState = WaterPlaceState.NONE;
-                pendingScoopPos = null;
+                waterPlaceState = WaterPlaceState.NONE; pendingScoopPos = null;
+            }
+            return;
+        }
+
+        // 1. 空桶收水 ─────────────────────────────────────────────────────────
+        if (isWaterAimed && hasBucket) {
+            scoopFluid(aimedFluid, "收水"); return;
+        }
+        // 2. 水桶换空桶
+        if (isWaterAimed && hasWaterBucket) {
+            placeWaterForBucket(aimedFluid); return;
+        }
+        // 3. 空桶收岩浆
+        if (isLavaAimed && hasBucket) {
+            scoopFluid(aimedFluid, "收岩浆"); return;
+        }
+
+        // 4. 手持物匹配 aimedCandidate → 直接放（手持优先），但瞄到液体时不放
+        if (aimedCandidate != null && aimedFluid == null) {
+            Item mainHand = mc.player.getMainHandStack().getItem();
+            boolean mainMatchesAim =
+                (aimedCandidate.type == PlaceType.WEB  && mainHand == Items.COBWEB)      ||
+                (aimedCandidate.type == PlaceType.LAVA && mainHand == Items.LAVA_BUCKET);
+
+            if (mainMatchesAim) {
+                placeCandidate(aimedCandidate); return;
+            }
+            // 瞄准了某个位置但手里不是对应物品 → 也直接放（自动换格）
+            if ((aimedCandidate.type == PlaceType.WEB  && hasWeb) ||
+                (aimedCandidate.type == PlaceType.LAVA && hasLava)) {
+                placeCandidate(aimedCandidate); return;
             }
         }
 
-        if (action == ActionType.NONE && isWaterAimed && canBucket) {
-            action = ActionType.SCOOP_WATER;
-        } else if (action == ActionType.NONE && isWaterAimed && !canBucket && canWaterBucket) {
-            action = ActionType.PLACE_WATER_FOR_BUCKET;
-        } else if (action == ActionType.NONE && aimOnCobweb && canLava && aimedPos != null) {
-            action = ActionType.PLACE_LAVA;
-        } else if (action == ActionType.NONE && isLavaAimed && canBucket) {
-            action = ActionType.SCOOP_LAVA;
-        } else if (action == ActionType.NONE && aimedPos != null) {
-            boolean inWebList  = webRenderPos.contains(aimedPos);
-            boolean inLavaList = lavaRenderPos.contains(aimedPos);
-
-            if (mainHand == Items.COBWEB && canWeb && inWebList) {
-                action = ActionType.PLACE_WEB;
-            } else if (mainHand == Items.LAVA_BUCKET && canLava && inLavaList) {
-                action = ActionType.PLACE_LAVA;
-            } else if (aimOnCobweb && canLava && inLavaList) {
-                action = ActionType.PLACE_LAVA;
-            } else if (aimOnCobweb && canWeb && inWebList) {
-                action = ActionType.PLACE_WEB;
-            } else if (inWebList && canWeb) {
-                action = ActionType.PLACE_WEB;
-            } else if (inLavaList && canLava) {
-                action = ActionType.PLACE_LAVA;
-            }
-        }
-
-        switch (action) {
-            case PLACE_WEB   -> placeBlock(aimedPos, Items.COBWEB,      "蜘蛛网", webRenderFaces);
-            case PLACE_LAVA  -> placeBlock(aimedPos, Items.LAVA_BUCKET, "岩浆",   lavaRenderFaces);
-            case SCOOP_WATER -> {
-                scoopFluid(aimedFluid, "收水");
-                if (waterPlaceState == WaterPlaceState.PLACED && pendingScoopPos != null
-                        && aimedFluid != null && aimedFluid.equals(pendingScoopPos)) {
-                    waterPlaceState = WaterPlaceState.NONE;
-                    pendingScoopPos = null;
+        // 5. 按优先级列表自动选择第一个可执行的候选点（瞄到液体时不自动放）
+        if (aimedFluid == null) {
+            for (PlaceCandidate candidate : allCandidates) {
+                boolean canDo = (candidate.type == PlaceType.WEB  && hasWeb)
+                             || (candidate.type == PlaceType.LAVA && hasLava);
+                if (canDo) {
+                    placeCandidate(candidate); return;
                 }
             }
-            case SCOOP_LAVA             -> scoopFluid(aimedFluid, "收岩浆");
-            case PLACE_WATER_FOR_BUCKET -> placeWaterForBucket(aimedFluid);
-            default -> {}
         }
     }
 
-    // ── Placement helpers ─────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  放置 / 收取 实现
+    // ═══════════════════════════════════════════════════════════════════════════
 
-    private void placeBlock(BlockPos targetPos, Item item, String name, Map<BlockPos, List<Direction>> faceMap) {
-        if (targetPos == null) return;
+    private void placeCandidate(PlaceCandidate candidate) {
+        Item item = (candidate.type == PlaceType.WEB) ? Items.COBWEB : Items.LAVA_BUCKET;
+        String name = (candidate.type == PlaceType.WEB) ? "蜘蛛网" : "岩浆";
+        placeBlock(candidate.pos, candidate.faces, item, name);
+    }
+
+    private void placeBlock(BlockPos targetPos, List<Direction> faces, Item item, String name) {
+        if (targetPos == null || faces == null || faces.isEmpty()) return;
         int slot = getSlot(item);
         if (slot == -1) {
             if (debug.get()) warning("放置" + name + "失败：背包没有该物品");
             return;
         }
-
-        List<Direction> faces = faceMap.get(targetPos);
-        if (faces == null || faces.isEmpty()) {
-            if (debug.get()) warning("放置" + name + "失败：" + targetPos.toShortString() + " 没有有效支撑面");
-            return;
-        }
-
         if (debug.get()) info("准备放" + name + " @ " + targetPos.toShortString() + "，可用面: " + faces.size());
 
         if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
@@ -315,20 +565,16 @@ public class AutoWeb extends Module {
             BlockHitResult bhr = new BlockHitResult(hitVec, face, support, false);
 
             ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-            if (!result.isAccepted()) {
-                result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            }
+            if (!result.isAccepted()) result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
             if (result.isAccepted()) {
                 mc.player.swingHand(Hand.MAIN_HAND);
-                if (debug.get()) info(">> " + name + " 放置成功（面: " + face + "）！进入冷却...");
-                cd = delay.get();
-                swapBackTimer = 2;
-                return;
+                if (debug.get()) info(">> " + name + " 放置成功（面: " + face + "）！");
+                cd = delay.get(); swapBackTimer = 2; return;
             }
         }
 
-        if (debug.get()) warning(">> " + name + " 所有面尝试均失败！");
+        if (debug.get()) warning(">> " + name + " 所有面均失败！");
         swapBackTimer = 1;
     }
 
@@ -336,7 +582,6 @@ public class AutoWeb extends Module {
         if (targetPos == null) return;
         int slot = getSlot(Items.BUCKET);
         if (slot == -1) return;
-
         if (debug.get()) info("准备" + name + " @ " + targetPos.toShortString());
 
         if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
@@ -344,17 +589,13 @@ public class AutoWeb extends Module {
 
         Vec3d hitVec = Vec3d.ofCenter(targetPos);
         BlockHitResult bhr = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
-
         ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-        if (!result.isAccepted()) {
-            result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        }
+        if (!result.isAccepted()) result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
         if (result.isAccepted()) {
             mc.player.swingHand(Hand.MAIN_HAND);
-            if (debug.get()) info(">> " + name + " 成功！进入冷却...");
-            cd = delay.get();
-            swapBackTimer = 2;
+            if (debug.get()) info(">> " + name + " 成功！");
+            cd = delay.get(); swapBackTimer = 2;
         } else {
             if (debug.get()) warning(">> " + name + " 失败！");
             swapBackTimer = 1;
@@ -364,38 +605,38 @@ public class AutoWeb extends Module {
     private void placeWaterForBucket(BlockPos targetPos) {
         if (targetPos == null) return;
         int slot = getSlot(Items.WATER_BUCKET);
-        if (slot == -1) {
-            if (debug.get()) warning("无法获取空桶：背包没有水桶");
-            return;
-        }
-
-        if (debug.get()) info("准备对水源方块放水重合 @ " + targetPos.toShortString());
+        if (slot == -1) return;
+        if (debug.get()) info("放水换空桶 @ " + targetPos.toShortString());
 
         if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
         mc.player.getInventory().setSelectedSlot(slot);
 
         Vec3d hitVec = Vec3d.ofCenter(targetPos);
         BlockHitResult bhr = new BlockHitResult(hitVec, Direction.UP, targetPos, false);
-
         ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, bhr);
-        if (!result.isAccepted()) {
-            result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-        }
+        if (!result.isAccepted()) result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
         if (result.isAccepted()) {
             mc.player.swingHand(Hand.MAIN_HAND);
-            if (debug.get()) info(">> 放水重合成功，下一 tick 检查水是否已消失并收回");
             waterPlaceState = WaterPlaceState.PLACED;
             pendingScoopPos = targetPos;
-            cd = delay.get();
-            swapBackTimer = 2;
+            cd = delay.get(); swapBackTimer = 2;
         } else {
-            if (debug.get()) warning(">> 放水重合失败");
             swapBackTimer = 1;
         }
     }
 
-    // ── Validity checks ───────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  实体 / 方块 判断工具
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** 判断是否为有效攻击目标（排除自身、非玩家队友等） */
+    private boolean isValidTarget(LivingEntity entity, double range) {
+        if (entity == mc.player) return false;
+        if (!entity.isAlive()) return false;
+        if (entity instanceof PlayerEntity p && p.isCreative()) return false;
+        return entity.distanceTo(mc.player) <= range;
+    }
 
     private boolean isValidForWeb(BlockPos pos) {
         return mc.world.getBlockState(pos).isReplaceable();
@@ -405,118 +646,12 @@ public class AutoWeb extends Module {
         BlockState state = mc.world.getBlockState(pos);
         if (!state.isReplaceable()) return false;
         if (noFluidRestriction) return true;
-        Fluid fluid = state.getFluidState().getFluid();
-        return fluid != Fluids.WATER && fluid != Fluids.FLOWING_WATER;
+        Fluid f = state.getFluidState().getFluid();
+        return f != Fluids.WATER && f != Fluids.FLOWING_WATER;
     }
 
-    private boolean isWaterSource(BlockPos pos) {
-        return mc.world.getBlockState(pos).getFluidState().getFluid() == Fluids.WATER;
-    }
-
-    private boolean isLavaSource(BlockPos pos) {
-        return mc.world.getBlockState(pos).getFluidState().getFluid() == Fluids.LAVA;
-    }
-
-    // ── Prediction & candidate building ──────────────────────────────────────
-
-    private BlockPos getPredictedPos(LivingEntity entity, int ticks) {
-        if (ticks <= 0) return entity.getBlockPos();
-        double dx = entity.getX() - entity.lastX;
-        double dz = entity.getZ() - entity.lastZ;
-        return BlockPos.ofFloored(entity.getEntityPos().add(dx * ticks, 0, dz * ticks));
-    }
-
-    private void buildPlaceable(LivingEntity target) {
-        BlockPos base        = getPredictedPos(target, predictTicks.get());
-        boolean  hasWeb      = hasInHotbar(Items.COBWEB);
-        boolean  hasLava     = hasInHotbar(Items.LAVA_BUCKET);
-        boolean  targetInWeb = isInCobweb(target);
-
-        // ── 基础 2×2 脚部候选 ───────────────────────────────────────────────
-        for (BlockPos pos : getFootQuad(base)) {
-            tryAddWeb(pos, targetInWeb);
-            // FIX 2 & 4: lava bestFaces now allows cobweb support + air-below support
-            tryAddLava(pos, !hasWeb || !hasLava);
-        }
-
-        // ── FIX 3: 目标被蜘蛛网困住时，额外添加蜘蛛网岩浆放置候选 ────────────
-        if (targetInWeb) {
-            addCobwebLavaCandidates(target, base);
-        }
-    }
-
-    /**
-     * 当目标被困在蜘蛛网中时，额外渲染3个可放置岩浆的面：
-     *   1. 蜘蛛网正上方（目标头部上方一格）
-     *   2. 距离玩家最近的两个水平侧面（蜘蛛网同层的水平相邻位置）
-     *
-     * 这3个位置以蜘蛛网本身作为支撑面，因此 bestFacesForLavaOnCobweb 必须允许 cobweb 作为支撑。
-     */
-    private void addCobwebLavaCandidates(LivingEntity target, BlockPos base) {
-        // 找到目标所在的蜘蛛网方块位置
-        BlockPos webPos = null;
-        if (mc.world.getBlockState(target.getBlockPos()).isOf(Blocks.COBWEB)) {
-            webPos = target.getBlockPos();
-        } else {
-            BlockPos headPos = BlockPos.ofFloored(target.getX(), target.getY() + 1, target.getZ());
-            if (mc.world.getBlockState(headPos).isOf(Blocks.COBWEB)) {
-                webPos = headPos;
-            }
-        }
-        if (webPos == null) return;
-
-        Vec3d playerEye = mc.player.getEyePos();
-
-        // 1. 蜘蛛网正上方 (webPos.up() 是放置位置，支撑面是 webPos 的 UP 面)
-        BlockPos above = webPos.up();
-        if (isValidForLava(above, true)) {
-            // 支撑面是 webPos（蜘蛛网），face = UP
-            List<Direction> faces = new ArrayList<>();
-            faces.add(Direction.UP); // place above, supported by web below
-            if (!lavaRenderPos.contains(above)) {
-                lavaRenderPos.add(above);
-                lavaRenderFaces.put(above, faces);
-            }
-        }
-
-        // 2. 蜘蛛网水平最近的两个侧面
-        // 候选：North, South, East, West 各相邻位置（与蜘蛛网同高）
-        List<Direction> horizontalDirs = Arrays.asList(
-            Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST);
-
-        // 按距离玩家眼睛排序，取最近两个有效的
-        horizontalDirs.sort(Comparator.comparingDouble(d -> {
-            BlockPos sidePos = webPos.offset(d);
-            return Vec3d.ofCenter(sidePos).squaredDistanceTo(playerEye);
-        }));
-
-        int added = 0;
-        for (Direction d : horizontalDirs) {
-            if (added >= 2) break;
-            BlockPos sidePos = webPos.offset(d);
-            if (!isValidForLava(sidePos, true)) continue;
-            // 支撑面是 webPos（蜘蛛网），face 是 d.getOpposite()
-            // 意味着 sidePos 被 webPos 支撑，face 方向从 sidePos 看向 webPos
-            Direction supportFace = d.getOpposite();
-            double distToSupport = Vec3d.ofCenter(webPos).distanceTo(playerEye);
-            if (distToSupport > targetRange.get()) continue;
-
-            List<Direction> faces;
-            if (lavaRenderPos.contains(sidePos)) {
-                // 已有候选，追加面
-                faces = lavaRenderFaces.get(sidePos);
-                if (faces != null && !faces.contains(supportFace)) {
-                    faces.add(supportFace);
-                }
-            } else {
-                faces = new ArrayList<>();
-                faces.add(supportFace);
-                lavaRenderPos.add(sidePos);
-                lavaRenderFaces.put(sidePos, faces);
-            }
-            added++;
-        }
-    }
+    private boolean isWaterSource(BlockPos pos) { return mc.world.getBlockState(pos).getFluidState().getFluid() == Fluids.WATER; }
+    private boolean isLavaSource(BlockPos pos)  { return mc.world.getBlockState(pos).getFluidState().getFluid() == Fluids.LAVA;  }
 
     private boolean isOnGround(LivingEntity entity) {
         BlockPos below = BlockPos.ofFloored(entity.getX(), entity.getY() - 0.1, entity.getZ());
@@ -529,267 +664,179 @@ public class AutoWeb extends Module {
             || mc.world.getBlockState(BlockPos.ofFloored(entity.getX(), entity.getY() + 1, entity.getZ())).isOf(Blocks.COBWEB);
     }
 
-    private List<BlockPos> getFootQuad(BlockPos footPos) {
-        List<BlockPos> list = new ArrayList<>();
-        int x = footPos.getX(), z = footPos.getZ(), y = footPos.getY();
-        list.add(new BlockPos(x,     y, z));
-        list.add(new BlockPos(x + 1, y, z));
-        list.add(new BlockPos(x,     y, z + 1));
-        list.add(new BlockPos(x + 1, y, z + 1));
-        return list;
-    }
+    // ── 面计算 ────────────────────────────────────────────────────────────────
 
-    private void tryAddWeb(BlockPos pos, boolean allowOnCobweb) {
-        if (!isValidForWeb(pos)) return;
-        List<Direction> faces = bestFacesForWeb(pos, allowOnCobweb);
-        if (faces.isEmpty()) return;
-        webRenderPos.add(pos);
-        webRenderFaces.put(pos, faces);
-    }
-
-    private void tryAddLava(BlockPos pos, boolean noFluidRestriction) {
-        if (!isValidForLava(pos, noFluidRestriction)) return;
-        // FIX 2: allowCobwebSupport=true so lava can be placed on cobweb supports
-        List<Direction> faces = bestFacesForLava(pos);
-        if (faces.isEmpty()) return;
-        lavaRenderPos.add(pos);
-        lavaRenderFaces.put(pos, faces);
-    }
-
-    /**
-     * Web placement faces: cobweb requires solid non-cobweb support
-     * (unless target is already stuck, then cobweb support is also allowed).
-     */
     private List<Direction> bestFacesForWeb(BlockPos pos, boolean allowCobwebSupport) {
         Vec3d eye = mc.player.getEyePos();
-        List<Direction> validFaces = new ArrayList<>();
-
+        List<Direction> valid = new ArrayList<>();
         for (Direction d : Direction.values()) {
             BlockPos support = pos.offset(d.getOpposite());
-            BlockState supportState = mc.world.getBlockState(support);
-            if (supportState.isAir() || supportState.isReplaceable()) continue;
-            if (!allowCobwebSupport && supportState.isOf(Blocks.COBWEB)) continue;
+            BlockState ss = mc.world.getBlockState(support);
+            if (ss.isAir() || ss.isReplaceable()) continue;
+            if (!allowCobwebSupport && ss.isOf(Blocks.COBWEB)) continue;
             if (Vec3d.ofCenter(support).distanceTo(eye) > targetRange.get()) continue;
-            validFaces.add(d);
+            valid.add(d);
         }
-
-        validFaces.sort(Comparator.comparingDouble(
-            d -> Vec3d.ofCenter(pos.offset(d.getOpposite())).squaredDistanceTo(eye)));
-        return validFaces;
+        valid.sort(Comparator.comparingDouble(d -> Vec3d.ofCenter(pos.offset(d.getOpposite())).squaredDistanceTo(eye)));
+        return valid;
     }
 
-    /**
-     * FIX 2 & 4: Lava placement faces.
-     *
-     * Key differences from web:
-     *  - Cobweb IS a valid support for lava (to burn it).
-     *  - Air below IS valid: lava buckets don't need a solid floor to stay;
-     *    we still need a solid neighbour to click on, but DOWN direction
-     *    (air below the pos) is now included as a special case using
-     *    a virtual "floor click" — we let interactItem handle the fallback.
-     *
-     * For the air-below case: we add Direction.DOWN to faces even if the
-     * block below is air, because placeBlock() will fall back to interactItem
-     * which places lava at the cursor position regardless.
-     */
     private List<Direction> bestFacesForLava(BlockPos pos) {
         Vec3d eye = mc.player.getEyePos();
-        List<Direction> validFaces = new ArrayList<>();
-
+        List<Direction> valid = new ArrayList<>();
         for (Direction d : Direction.values()) {
             BlockPos support = pos.offset(d.getOpposite());
-            BlockState supportState = mc.world.getBlockState(support);
-
-            // FIX 4: Allow air below — lava bucket can be placed in mid-air
-            // by using interactItem. We still add it as a face candidate.
+            BlockState ss = mc.world.getBlockState(support);
             if (d == Direction.DOWN) {
-                // Air below = no solid floor, but lava bucket can still be placed via interactItem.
-                // Only add if within range.
-                if (Vec3d.ofCenter(pos).distanceTo(eye) <= targetRange.get()) {
-                    validFaces.add(Direction.DOWN);
-                }
+                if (Vec3d.ofCenter(pos).distanceTo(eye) <= targetRange.get()) valid.add(Direction.DOWN);
                 continue;
             }
-
-            // Standard solid support check (but cobweb IS allowed for lava)
-            if (supportState.isAir() || supportState.isReplaceable()) continue;
-            // FIX 2: Do NOT skip cobweb — lava can be placed on cobweb faces
+            if (ss.isAir() || ss.isReplaceable()) continue;
+            // 岩浆允许蜘蛛网作为支撑面
             if (Vec3d.ofCenter(support).distanceTo(eye) > targetRange.get()) continue;
-            validFaces.add(d);
+            valid.add(d);
         }
-
-        validFaces.sort(Comparator.comparingDouble(d -> {
-            BlockPos support = pos.offset(d.getOpposite());
-            return Vec3d.ofCenter(support).squaredDistanceTo(eye);
-        }));
-        return validFaces;
+        valid.sort(Comparator.comparingDouble(d -> Vec3d.ofCenter(pos.offset(d.getOpposite())).squaredDistanceTo(eye)));
+        return valid;
     }
 
-    private Direction getBestFace(BlockPos pos, Map<BlockPos, List<Direction>> faceMap) {
-        List<Direction> faces = faceMap.get(pos);
-        if (faces == null || faces.isEmpty()) return null;
-        return faces.get(0);
+    // ── 脚部四格 ─────────────────────────────────────────────────────────────
+
+    private List<BlockPos> getFootQuad(BlockPos fp) {
+        return Arrays.asList(
+            new BlockPos(fp.getX(),     fp.getY(), fp.getZ()),
+            new BlockPos(fp.getX() + 1, fp.getY(), fp.getZ()),
+            new BlockPos(fp.getX(),     fp.getY(), fp.getZ() + 1),
+            new BlockPos(fp.getX() + 1, fp.getY(), fp.getZ() + 1));
     }
 
-    // ── Raycast helpers ───────────────────────────────────────────────────────
+    // ── Raycast ───────────────────────────────────────────────────────────────
 
-    private BlockPos getLookedPlacePos(List<BlockPos> candidates) {
-        Vec3d cameraPos = mc.player.getCameraPosVec(1.0F);
-        Vec3d endPos    = cameraPos.add(mc.player.getRotationVec(1.0F).multiply(targetRange.get()));
-
+    /**
+     * 玩家当前瞄准的、在 allCandidates 中对应 type 的候选点位置。
+     */
+    private BlockPos getLookedCandidatePos(PlaceType type) {
+        Vec3d cam = mc.player.getCameraPosVec(1.0F);
+        Vec3d end = cam.add(mc.player.getRotationVec(1.0F).multiply(targetRange.get()));
         BlockHitResult hit = mc.world.raycast(new RaycastContext(
-            cameraPos, endPos,
-            RaycastContext.ShapeType.OUTLINE,
-            RaycastContext.FluidHandling.NONE,
-            mc.player));
-
-        if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
-            BlockPos placePos = hit.getBlockPos().offset(hit.getSide());
-            if (candidates.contains(placePos)) return placePos;
+            cam, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, mc.player));
+        if (hit == null || hit.getType() != HitResult.Type.BLOCK) return null;
+        BlockPos placePos = hit.getBlockPos().offset(hit.getSide());
+        for (PlaceCandidate c : allCandidates) {
+            if (c.pos.equals(placePos) && c.type == type) return placePos;
         }
         return null;
     }
 
     private BlockPos getLookedFluidPos() {
-        Vec3d cameraPos = mc.player.getCameraPosVec(1.0F);
-        Vec3d endPos    = cameraPos.add(mc.player.getRotationVec(1.0F).multiply(targetRange.get()));
-
+        Vec3d cam = mc.player.getCameraPosVec(1.0F);
+        Vec3d end = cam.add(mc.player.getRotationVec(1.0F).multiply(targetRange.get()));
         BlockHitResult hit = mc.world.raycast(new RaycastContext(
-            cameraPos, endPos,
-            RaycastContext.ShapeType.OUTLINE,
-            RaycastContext.FluidHandling.SOURCE_ONLY,
-            mc.player));
+            cam, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.SOURCE_ONLY, mc.player));
+        if (hit == null || hit.getType() != HitResult.Type.BLOCK) return null;
+        BlockPos p = hit.getBlockPos();
+        Fluid f = mc.world.getBlockState(p).getFluidState().getFluid();
+        return (f == Fluids.WATER || f == Fluids.LAVA) ? p : null;
+    }
 
-        if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
-            BlockPos hitPos = hit.getBlockPos();
-            Fluid fluid = mc.world.getBlockState(hitPos).getFluidState().getFluid();
-            if (fluid == Fluids.WATER || fluid == Fluids.LAVA) return hitPos;
+    /** 在 allCandidates 中查找对应 pos + type 的候选 */
+    private PlaceCandidate findCandidate(BlockPos pos, PlaceType type) {
+        if (pos == null) return null;
+        for (PlaceCandidate c : allCandidates) {
+            if (c.pos.equals(pos) && c.type == type) return c;
         }
         return null;
     }
 
-    // ── Target tracking ───────────────────────────────────────────────────────
+    // ── 液体扫描 ──────────────────────────────────────────────────────────────
 
-    private void updateTarget() {
-        if (mc.crosshairTarget instanceof net.minecraft.util.hit.EntityHitResult entityHit
-                && entityHit.getEntity() instanceof LivingEntity living) {
-            lockedTarget = living;
+    private void scanNearbyFluids() {
+        BlockPos pp = mc.player.getBlockPos();
+        double range = fluidRange.get();
+        int r = (int) Math.ceil(range);
+        for (int dx = -r; dx <= r; dx++) for (int dy = -r; dy <= r; dy++) for (int dz = -r; dz <= r; dz++) {
+            BlockPos pos = pp.add(dx, dy, dz);
+            if (mc.player.squaredDistanceTo(Vec3d.ofCenter(pos)) > range * range) continue;
+            Fluid f = mc.world.getBlockState(pos).getFluidState().getFluid();
+            if (f == Fluids.WATER || f == Fluids.LAVA) fluidRenderPos.add(pos);
         }
     }
 
-    // ── Inventory helpers ─────────────────────────────────────────────────────
+    // ── 背包工具 ──────────────────────────────────────────────────────────────
 
     private int getSlot(Item item) {
         if (mc.player.getMainHandStack().isOf(item)) return mc.player.getInventory().getSelectedSlot();
-        for (int i = 0; i < 9; i++) {
-            if (mc.player.getInventory().getStack(i).isOf(item)) return i;
-        }
+        for (int i = 0; i < 9; i++) if (mc.player.getInventory().getStack(i).isOf(item)) return i;
         return -1;
     }
+    private boolean hasInHotbar(Item item) { return getSlot(item) != -1; }
 
-    private boolean hasInHotbar(Item item) {
-        return getSlot(item) != -1;
-    }
-
-    // ── Fluid scan ────────────────────────────────────────────────────────────
-
-    private void scanNearbyFluids() {
-        BlockPos playerPos = mc.player.getBlockPos();
-        double range = fluidRange.get();
-        int r = (int) Math.ceil(range);
-
-        for (int dx = -r; dx <= r; dx++) {
-            for (int dy = -r; dy <= r; dy++) {
-                for (int dz = -r; dz <= r; dz++) {
-                    BlockPos pos = playerPos.add(dx, dy, dz);
-                    if (mc.player.squaredDistanceTo(Vec3d.ofCenter(pos)) > range * range) continue;
-                    BlockState state = mc.world.getBlockState(pos);
-                    Fluid fluid = state.getFluidState().getFluid();
-                    if (fluid == Fluids.WATER || fluid == Fluids.LAVA) {
-                        fluidRenderPos.add(pos);
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  渲染
+    // ═══════════════════════════════════════════════════════════════════════════
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        boolean holdMode  = triggerMode.get() == TriggerMode.HOLD;
-        boolean triggered = !holdMode || activateBind.get().isPressed();
+        boolean triggered = triggerMode.get() == TriggerMode.ALWAYS
+                         || activateBind.get().isPressed();
 
+        // 液体覆盖（触发时始终渲染，不受 debug2 影响）
         if (triggered) {
             for (BlockPos pos : fluidRenderPos) {
-                Fluid fluid = mc.world.getBlockState(pos).getFluidState().getFluid();
-                boolean isWater = fluid == Fluids.WATER || fluid == Fluids.FLOWING_WATER;
-                if (isWater) {
-                    event.renderer.box(pos, waterColor.get(), waterLine.get(), ShapeMode.Both, 0);
+                Fluid f = mc.world.getBlockState(pos).getFluidState().getFluid();
+                boolean isSource = mc.world.getBlockState(pos).getFluidState().isStill();
+                // 只渲染母体液体方块
+                if (!isSource) continue;
+                boolean isWater = f == Fluids.WATER || f == Fluids.FLOWING_WATER;
+                event.renderer.box(pos,
+                    isWater ? waterColor.get()     : fluidLavaColor.get(),
+                    isWater ? waterLine.get()      : fluidLavaLine.get(),
+                    ShapeMode.Both, 0);
+            }
+        }
+
+        // 候选放置点渲染（仅开启 debug2 时渲染）
+        if (debug2.get()) {
+            for (PlaceCandidate candidate : allCandidates) {
+                boolean isWebType  = candidate.type == PlaceType.WEB;
+                boolean isAimed    = isWebType
+                    ? candidate.pos.equals(aimedWebPos)
+                    : candidate.pos.equals(aimedLavaPos);
+                boolean canPlace   = isWebType
+                    ? hasInHotbar(Items.COBWEB)       && isValidForWeb(candidate.pos)
+                    : hasInHotbar(Items.LAVA_BUCKET)  && isValidForLava(candidate.pos, false);
+
+                SettingColor side, line;
+                if (triggered && isAimed) {
+                    side = aimColor.get(); line = aimLine.get();
+                } else if (canPlace) {
+                    side = isWebType ? webColor.get()  : lavaColor.get();
+                    line = isWebType ? webLine.get()   : lavaLine.get();
                 } else {
-                    event.renderer.box(pos, fluidLavaColor.get(), fluidLavaLine.get(), ShapeMode.Both, 0);
+                    side = new SettingColor(150, 150, 150, 30);
+                    line = new SettingColor(150, 150, 150, 180);
                 }
-            }
-        }
 
-        // FIX 1: Web render — use aimedWebPos (independent of lava aim)
-        for (BlockPos pos : webRenderPos) {
-            List<Direction> faces = webRenderFaces.get(pos);
-            if (faces == null || faces.isEmpty()) continue;
-
-            boolean isAimed  = pos.equals(aimedWebPos); // FIX: use aimedWebPos directly
-            boolean canPlace = hasInHotbar(Items.COBWEB) && isValidForWeb(pos);
-
-            SettingColor side = (triggered && isAimed) ? aimColor.get()
-                               : canPlace              ? webColor.get()
-                               : new SettingColor(150, 150, 150, 30);
-            SettingColor line = (triggered && isAimed) ? aimLine.get()
-                               : canPlace              ? webLine.get()
-                               : new SettingColor(150, 150, 150, 180);
-
-            for (Direction face : faces) {
-                BlockPos support = pos.offset(face.getOpposite());
-                renderSupportFace(event, support, face, side, line, 0.0);
-            }
-        }
-
-        // FIX 1: Lava render — use aimedLavaPos (independent of web aim)
-        for (BlockPos pos : lavaRenderPos) {
-            List<Direction> faces = lavaRenderFaces.get(pos);
-            if (faces == null || faces.isEmpty()) continue;
-
-            boolean isAimed  = pos.equals(aimedLavaPos); // FIX: use aimedLavaPos directly
-            boolean canPlace = hasInHotbar(Items.LAVA_BUCKET) && isValidForLava(pos, false);
-
-            SettingColor side = (triggered && isAimed) ? aimColor.get()
-                               : canPlace              ? lavaColor.get()
-                               : new SettingColor(150, 150, 150, 30);
-            SettingColor line = (triggered && isAimed) ? aimLine.get()
-                               : canPlace              ? lavaLine.get()
-                               : new SettingColor(150, 150, 150, 180);
-
-            for (Direction face : faces) {
-                BlockPos support = pos.offset(face.getOpposite());
-                renderSupportFace(event, support, face, side, line, 0.0);
+                for (Direction face : candidate.faces) {
+                    BlockPos support = candidate.pos.offset(face.getOpposite());
+                    renderSupportFace(event, support, face, side, line);
+                }
             }
         }
     }
 
-    // ── Thin-face renderer ────────────────────────────────────────────────────
-
     private void renderSupportFace(Render3DEvent event, BlockPos support, Direction face,
-                                   SettingColor side, SettingColor line, double inset) {
-        final double T = 0.02;
+                                   SettingColor side, SettingColor line) {
+        final double T = 0.02, I = 0.0;
         double bx = support.getX(), by = support.getY(), bz = support.getZ();
         double x1, y1, z1, x2, y2, z2;
-
         switch (face) {
-            case UP    -> { x1 = bx+inset;   y1 = by+1-T;       z1 = bz+inset;   x2 = bx+1-inset; y2 = by+1+T-inset; z2 = bz+1-inset; }
-            case DOWN  -> { x1 = bx+inset;   y1 = by-T+inset;   z1 = bz+inset;   x2 = bx+1-inset; y2 = by+T;         z2 = bz+1-inset; }
-            case NORTH -> { x1 = bx+inset;   y1 = by+inset;     z1 = bz-T+inset; x2 = bx+1-inset; y2 = by+1-inset;   z2 = bz+T;       }
-            case SOUTH -> { x1 = bx+inset;   y1 = by+inset;     z1 = bz+1-T;     x2 = bx+1-inset; y2 = by+1-inset;   z2 = bz+1+T-inset; }
-            case WEST  -> { x1 = bx-T+inset; y1 = by+inset;     z1 = bz+inset;   x2 = bx+T;       y2 = by+1-inset;   z2 = bz+1-inset; }
-            case EAST  -> { x1 = bx+1-T;     y1 = by+inset;     z1 = bz+inset;   x2 = bx+1+T-inset; y2 = by+1-inset; z2 = bz+1-inset; }
+            case UP    -> { x1=bx+I;   y1=by+1-T;   z1=bz+I;   x2=bx+1-I; y2=by+1+T-I; z2=bz+1-I; }
+            case DOWN  -> { x1=bx+I;   y1=by-T+I;   z1=bz+I;   x2=bx+1-I; y2=by+T;      z2=bz+1-I; }
+            case NORTH -> { x1=bx+I;   y1=by+I;     z1=bz-T+I; x2=bx+1-I; y2=by+1-I;    z2=bz+T;   }
+            case SOUTH -> { x1=bx+I;   y1=by+I;     z1=bz+1-T; x2=bx+1-I; y2=by+1-I;    z2=bz+1+T-I; }
+            case WEST  -> { x1=bx-T+I; y1=by+I;     z1=bz+I;   x2=bx+T;   y2=by+1-I;    z2=bz+1-I; }
+            case EAST  -> { x1=bx+1-T; y1=by+I;     z1=bz+I;   x2=bx+1+T-I; y2=by+1-I;  z2=bz+1-I; }
             default    -> { return; }
         }
         event.renderer.box(x1, y1, z1, x2, y2, z2, side, line, ShapeMode.Both, 0);
