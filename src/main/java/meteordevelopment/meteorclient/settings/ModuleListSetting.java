@@ -52,7 +52,9 @@ public class ModuleListSetting extends Setting<List<Module>> {
     public List<String> getSuggestions() {
         if (suggestions == null) {
             suggestions = new ArrayList<>(Modules.get().getAll().size());
-            for (Module module : Modules.get().getAll()) suggestions.add(module.name);
+            for (Module module : Modules.get().getAll()) {
+                if (module.showInModuleList) suggestions.add(module.name);
+            }
         }
 
         return suggestions;
@@ -74,7 +76,7 @@ public class ModuleListSetting extends Setting<List<Module>> {
         NbtList valueTag = tag.getListOrEmpty("modules");
         for (NbtElement tagI : valueTag) {
             Module module = Modules.get().get(tagI.asString().orElse(""));
-            if (module != null) get().add(module);
+            if (module != null && module.showInModuleList) get().add(module);
         }
 
         return get();

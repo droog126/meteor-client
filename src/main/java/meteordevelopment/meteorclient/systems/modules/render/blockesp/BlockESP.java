@@ -364,6 +364,7 @@ public class BlockESP extends Module {
 
     @EventHandler
     private void onChunkData(ChunkDataEvent event) {
+        if (!isActive()) return;
         searchChunk(event.chunk());
     }
 
@@ -390,6 +391,7 @@ public class BlockESP extends Module {
 
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
+        if (!isActive()) return;
         // Fix #2: 在主线程立刻捕获坐标为局部 int，避免 Mutable 成员变量跨线程竞态
         final int bx = event.pos.getX();
         final int by = event.pos.getY();
@@ -442,6 +444,7 @@ public class BlockESP extends Module {
 
     @EventHandler
     private void onPostTick(TickEvent.Post event) {
+        if (!isActive()) return;
         DimensionType dimension = mc.world.getDimension();
         if (lastDimension != dimension) onActivate();
         lastDimension = dimension;
@@ -449,6 +452,7 @@ public class BlockESP extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
+        if (!isActive()) return;
         if (enableGroupKeybinds.get()) {
             boolean isGroup1KeyPressed = group1Key.get().isPressed();
             boolean isGroup2KeyPressed = group2Key.get().isPressed();
@@ -474,6 +478,7 @@ public class BlockESP extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
+        if (!isActive()) return;
         List<ESPChunk> staleChunks = null;
 
         synchronized (chunks) {

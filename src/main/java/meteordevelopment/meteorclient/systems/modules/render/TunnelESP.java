@@ -204,6 +204,7 @@ public class TunnelESP extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        if (!isActive()) return;
         synchronized (chunks) {
             for (TChunk tChunk : chunks.values()) tChunk.marked = false;
             int added = 0;
@@ -227,6 +228,7 @@ public class TunnelESP extends Module {
 
     @EventHandler
     private void onRender3D(Render3DEvent event) {
+        if (!isActive()) return;
         synchronized (chunks) {
             for (TChunk chunk : chunks.values()) chunk.render(event.renderer);
         }

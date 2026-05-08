@@ -346,6 +346,7 @@ public class ESP extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        if (!isActive()) return;
         cachedTarget = highlightTarget.get() ? getTargetEntity(100.0, 1.0f) : null;
     }
 
@@ -392,7 +393,7 @@ public class ESP extends Module {
 
     @EventHandler
     private void onRender3D(Render3DEvent event) {
-        if (mode.get() == Mode._2D) return;
+        if (!isActive() || mode.get() == Mode._2D) return;
         count = 0;
         cachedTarget = highlightTarget.get() ? getTargetEntity(100.0, event.tickDelta) : null;
 
@@ -440,7 +441,7 @@ public class ESP extends Module {
 
     @EventHandler
     private void onRender2D(Render2DEvent event) {
-        if (mode.get() != Mode._2D) return;
+        if (!isActive() || mode.get() != Mode._2D) return;
 
         Renderer2D.COLOR.begin();
         count = 0;
@@ -586,7 +587,7 @@ public class ESP extends Module {
                     int r = (int) MathHelper.lerp(sine, lowHpColor.get().r, 255);
                     int g = (int) MathHelper.lerp(sine, lowHpColor.get().g, 255);
                     int b = (int) MathHelper.lerp(sine, lowHpColor.get().b, 255);
-                    return mutableHealthColor.set(r, g, b, 255);
+                    return mutableHealthColor.set(r, g, b, lowHpColor.get().a);
                 }
                 return mutableHealthColor.set(lowHpColor.get());
             }
@@ -594,19 +595,21 @@ public class ESP extends Module {
                 if (hpGradient.get()) {
                     if (hpVal <= 10) {
                         double t = hpVal / 10.0;
+                        int alpha = (int) MathHelper.lerp(t, lowHpColor.get().a, mediumHpColor.get().a);
                         return mutableHealthColor.set(
                             (int) MathHelper.lerp(t, lowHpColor.get().r, mediumHpColor.get().r),
                             (int) MathHelper.lerp(t, lowHpColor.get().g, mediumHpColor.get().g),
                             (int) MathHelper.lerp(t, lowHpColor.get().b, mediumHpColor.get().b),
-                            255
+                            alpha
                         );
                     } else {
                         double t = (hpVal - 10.0) / 10.0;
+                        int alpha = (int) MathHelper.lerp(t, mediumHpColor.get().a, highHpColor.get().a);
                         return mutableHealthColor.set(
                             (int) MathHelper.lerp(t, mediumHpColor.get().r, highHpColor.get().r),
                             (int) MathHelper.lerp(t, mediumHpColor.get().g, highHpColor.get().g),
                             (int) MathHelper.lerp(t, mediumHpColor.get().b, highHpColor.get().b),
-                            255
+                            alpha
                         );
                     }
                 }

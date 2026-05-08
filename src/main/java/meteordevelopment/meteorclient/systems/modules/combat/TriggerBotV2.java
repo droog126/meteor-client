@@ -16,10 +16,9 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.BowItem;
 import net.minecraft.item.Items;
+import net.minecraft.item.ItemStack;
 import net.minecraft.scoreboard.AbstractTeam;
-import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
@@ -28,6 +27,8 @@ import net.minecraft.util.math.Vec3d;
 import java.util.Set;
 
 public class TriggerBotV2 extends Module {
+    public static Entity currentTarget = null;
+    
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTactics = settings.createGroup("战术 (Tactics)");
 
@@ -42,15 +43,19 @@ public class TriggerBotV2 extends Module {
             .name("no-cooldown").description("完全无视攻击冷却（覆盖下方阈值设置）").defaultValue(false).build());
 
     private final Setting<Double> firstHitThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("first-hit-threshold").description("首刀最小冷却阈值（0 = 完全无视冷却）").defaultValue(0.0).min(0.0).max(1.0)
+            .name("first-hit-threshold").description("首刀最小冷却阈值（0 = 完全无视冷却）").defaultValue(0.843).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> hitThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("hit-threshold").description("连击平砍冷却阈值（no-cooldown 关闭时生效）").defaultValue(0.95).min(0.0).max(1.0)
+            .name("hit-threshold").description("连击平砍冷却阈值1（no-cooldown 关闭时生效）").defaultValue(0.927).min(0.0).max(1.0)
+            .build());
+
+    private final Setting<Double> hitThreshold2 = sgGeneral.add(new DoubleSetting.Builder()
+            .name("hit-threshold-2").description("连击平砍冷却阈值2（no-cooldown 关闭时生效，50%概率选择）").defaultValue(0.843).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> critThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("crit-threshold").description("连击暴击冷却阈值（no-cooldown 关闭时生效）").defaultValue(0.85).min(0.0).max(1.0)
+            .name("crit-threshold").description("连击暴击冷却阈值（no-cooldown 关闭时生效）").defaultValue(0.7).min(0.0).max(1.0)
             .build());
 
     // ==================== TPS 同步 ====================
@@ -78,13 +83,26 @@ public class TriggerBotV2 extends Module {
         isFirstAttack = true;
         hasAirSwung = false;
     }
+    
+    @Override
+    public void onDeactivate() {
+        currentTarget = null;
+    }
 
     @EventHandler(priority = EventPriority.HIGH)
     private void onPreTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null || mc.player.isUsingItem())
+        if (!isActive() || mc.player == null || mc.world == null || mc.player.isUsingItem()) {
+            currentTarget = null;
             return;
+        }
+
+        if (isHoldingNonCombatItem()) {
+            currentTarget = null;
+            return;
+        }
 
         Entity target = getTarget();
+        currentTarget = target;
       
 
         // ================= 准星没有对准任何人 =================
@@ -141,7 +159,7 @@ public class TriggerBotV2 extends Module {
     private void doNormalAttack(Entity target) {
         ((MinecraftClientAccessor) mc).meteor$leftClick();
 
-        UltimateSprint.requestWSprint();
+        if (Math.random() < 0.5) UltimateSprint.requestWSprint();
     }
 
     private void doLeftClick() {
@@ -163,7 +181,12 @@ public class TriggerBotV2 extends Module {
             return true;
 
         boolean isFalling = canCrit();
-        double required = isFalling ? critThreshold.get() : hitThreshold.get();
+        double required;
+        if (isFalling) {
+            required = critThreshold.get();
+        } else {
+            required = Math.random() < 0.5 ? hitThreshold.get() : hitThreshold2.get();
+        }
         float progress = getSyncedCooldownProgress();
         return progress >= required;
     }
@@ -190,7 +213,7 @@ public class TriggerBotV2 extends Module {
         return mc.world.getOtherEntities(mc.player, box, this::isValid).size();
     }
 
-    private boolean isValid(Entity e) {
+    public boolean isValid(Entity e) {
         if (e == null || !e.isAlive() || e == mc.player)
             return false;
         if (e instanceof LivingEntity le && le.getHealth() <= 0)
@@ -218,6 +241,14 @@ public class TriggerBotV2 extends Module {
 
     private boolean isMace() {
         return mc.player.getMainHandStack().isOf(Items.MACE);
+    }
+
+    private boolean isHoldingNonCombatItem() {
+        ItemStack stack = mc.player.getMainHandStack();
+        return stack.isOf(Items.COBWEB)
+            || stack.isOf(Items.LAVA_BUCKET)
+            || stack.isOf(Items.WATER_BUCKET)
+            || stack.isOf(Items.BUCKET);
     }
 
     private boolean canCrit() {

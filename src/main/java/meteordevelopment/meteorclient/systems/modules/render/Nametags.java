@@ -258,6 +258,8 @@ public class Nametags extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        if (!isActive() || mc.world == null || mc.player == null) return;
+        
         entityList.clear();
 
         boolean freecamNotActive = !Modules.get().isActive(Freecam.class);
@@ -359,6 +361,7 @@ public class Nametags extends Module {
 
     @EventHandler
     private void onRender2D(Render2DEvent event) {
+        if (!isActive()) return; // 确保模块没激活时不渲染
         int count  = getRenderCount();
         boolean shadow = Config.get().customFont.get();
 

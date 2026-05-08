@@ -56,6 +56,7 @@ public class CityESP extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        if (!isActive()) return;
         PlayerEntity targetEntity = TargetUtils.getPlayerTarget(mc.player.getBlockInteractionRange() + 2, SortPriority.LowestDistance);
 
         if (TargetUtils.isBadTarget(targetEntity, mc.player.getBlockInteractionRange() + 2)) {
@@ -67,7 +68,7 @@ public class CityESP extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (target == null) return;
+        if (!isActive() || target == null) return;
 
         event.renderer.box(target, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
     }

@@ -100,6 +100,7 @@ public class VoidESP extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
+        if (!isActive()) return;
         voidHoles.clear();
         if (mc.world.getDimensionEntry() == DimensionTypes.THE_END) return;
 
@@ -123,6 +124,7 @@ public class VoidESP extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
+        if (!isActive()) return;
         for (Void voidHole : voidHoles) voidHole.render(event);
     }
 

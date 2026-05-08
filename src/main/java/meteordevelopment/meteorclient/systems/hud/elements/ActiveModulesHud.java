@@ -9,6 +9,10 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.hud.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.combat.AutoWeb;
+import meteordevelopment.meteorclient.systems.modules.combat.TriggerBotV2;
+import meteordevelopment.meteorclient.systems.modules.misc.DisableAll;
+import meteordevelopment.meteorclient.systems.modules.movement.UltimateSprint;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 
@@ -201,8 +205,19 @@ public class ActiveModulesHud extends HudElement {
     public void tick(HudRenderer renderer) {
         modules.clear();
 
+        DisableAll disableAll = Modules.get().get(DisableAll.class);
+        boolean isDisableAllActive = disableAll != null && disableAll.isActive();
+
         for (Module module : Modules.get().getActive()) {
-            if (!hiddenModules.get().contains(module)) modules.add(module);
+            if (!hiddenModules.get().contains(module)) {
+                if (!isDisableAllActive) {
+                    modules.add(module);
+                } else {
+                    if (disableAll == null || !disableAll.isProtected(module)) {
+                        modules.add(module);
+                    }
+                }
+            }
         }
 
         if (modules.isEmpty()) {

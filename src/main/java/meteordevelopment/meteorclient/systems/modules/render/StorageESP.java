@@ -307,6 +307,7 @@ public class StorageESP extends Module {
 
     @EventHandler
     private void onBlockInteract(InteractBlockEvent event) {
+        if (!isActive()) return;
         BlockPos pos = event.result.getBlockPos();
         if (interactedBlocks.contains(pos)) return;
 
@@ -329,6 +330,7 @@ public class StorageESP extends Module {
 
     @EventHandler
     private void onRender(Render3DEvent event) {
+        if (!isActive()) return;
         count = 0;
 
         List<BlockEntityType<?>> storageBlockList = storageBlocks.get();

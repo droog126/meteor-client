@@ -7,8 +7,7 @@ base {
     archivesName = properties["archives_base_name"] as String
     group = properties["maven_group"] as String
 
-    val suffix = providers.gradleProperty("build_number").getOrElse("local")
-    version = "${libs.versions.minecraft.get()}-$suffix"
+    version = libs.versions.minecraft.get()
 }
 
 repositories {
@@ -88,7 +87,6 @@ dependencies {
     // Libraries (JAR-in-JAR)
     jij(libs.orbit)
     jij(libs.starscript)
-    jij(libs.discord.ipc)
     jij(libs.reflections)
     jij(libs.netty.handler.proxy) { isTransitive = false }
     jij(libs.netty.codec.socks) { isTransitive = false }
@@ -147,7 +145,7 @@ afterEvaluate {
 }
 
 loom {
-    accessWidenerPath = file("src/main/resources/meteor-client.accesswidener")
+    accessWidenerPath = file("src/main/resources/viafog.accesswidener")
 }
 
 tasks {

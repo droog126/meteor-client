@@ -566,7 +566,7 @@ public class KeyboardHud extends HudElement {
         double s = scale.get();
 
         // because of a meteor bug, the modules search field swallows inputs
-        InputUtil.Key guiKey = ((KeyBindingAccessor) KeyBinds.OPEN_GUI).meteor$getKey();
+        InputUtil.Key guiKey = InputUtil.Type.KEYSYM.createFromCode(KeyBinds.OPEN_GUI_KEY);
 
         for (Key key : keys) {
             if (key.matches(guiKey.getCode(), guiKey.getCode(), guiKey.getCategory() != InputUtil.Type.MOUSE)) {

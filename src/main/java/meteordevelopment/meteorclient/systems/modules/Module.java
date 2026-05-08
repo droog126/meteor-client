@@ -44,6 +44,7 @@ public abstract class Module implements ISerializable<Module>, Comparable<Module
     public boolean serialize = true;
     public boolean runInMainMenu = false;
     public boolean autoSubscribe = true;
+    public boolean showInModuleList = true;
 
     public final Keybind keybind = Keybind.none();
     public boolean toggleOnBindRelease = false;
@@ -115,10 +116,7 @@ public abstract class Module implements ISerializable<Module>, Comparable<Module
     }
 
     public void sendToggledMsg() {
-        if (Config.get().chatFeedback.get() && chatFeedback) {
-            ChatUtils.forceNextPrefixClass(getClass());
-            ChatUtils.sendMsg(this.hashCode(), Formatting.GRAY, "Toggled (highlight)%s(default) %s(default).", title, isActive() ? Formatting.GREEN + "on" : Formatting.RED + "off");
-        }
+        // Disable all toggle messages
     }
 
     public void info(Text message) {

@@ -10,6 +10,7 @@ import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.game.OpenScreenEvent;
+import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.events.meteor.ActiveModulesChangedEvent;
 import meteordevelopment.meteorclient.events.meteor.KeyEvent;
 import meteordevelopment.meteorclient.events.meteor.ModuleBindChangedEvent;
@@ -250,11 +251,9 @@ public class Modules extends System<Modules> {
 
         if (moduleToBind.keybind.canBindTo(isKey, value, modifiers)) {
             moduleToBind.keybind.set(isKey, value, modifiers);
-            moduleToBind.info("Bound to (highlight)%s(default).", moduleToBind.keybind);
         }
         else if (value == GLFW.GLFW_KEY_ESCAPE) {
             moduleToBind.keybind.set(Keybind.none());
-            moduleToBind.info("Removed bind.");
         }
         else return false;
 
@@ -309,6 +308,16 @@ public class Modules extends System<Modules> {
                     MeteorClient.EVENT_BUS.subscribe(module);
                     module.onActivate();
                 }
+            }
+        }
+    }
+
+    @EventHandler
+    private void onTick(TickEvent.Pre event) {
+        for (Module module : moduleInstances.values()) {
+            if (module.toggleOnBindRelease && module.isActive() && !module.keybind.isPressed()) {
+                module.toggle();
+                module.sendToggledMsg();
             }
         }
     }
@@ -577,6 +586,7 @@ public class Modules extends System<Modules> {
         add(new BetterBeacons());
         add(new BetterChat());
         add(new BookBot());
+        add(new DisableAll());
         add(new DiscordPresence());
         add(new InventoryTweaks());
         add(new MessageAura());
