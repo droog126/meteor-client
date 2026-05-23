@@ -7,8 +7,6 @@ import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.movement.UltimateSprint;
-import meteordevelopment.meteorclient.utils.player.Rotations;
-import meteordevelopment.meteorclient.utils.world.TickRate;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.entity.Entity;
@@ -39,28 +37,21 @@ public class TriggerBotV2 extends Module {
     private final Setting<Boolean> checkTeams = sgGeneral.add(new BoolSetting.Builder()
             .name("check-teams").description("不攻击队友").defaultValue(true).build());
 
-    private final Setting<Boolean> noCooldown = sgGeneral.add(new BoolSetting.Builder()
-            .name("no-cooldown").description("完全无视攻击冷却（覆盖下方阈值设置）").defaultValue(false).build());
-
     private final Setting<Double> firstHitThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("first-hit-threshold").description("首刀最小冷却阈值（0 = 完全无视冷却）").defaultValue(0.843).min(0.0).max(1.0)
+            .name("first-hit-threshold").description("首刀最小冷却阈值").defaultValue(0.843).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> hitThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("hit-threshold").description("连击平砍冷却阈值1（no-cooldown 关闭时生效）").defaultValue(0.927).min(0.0).max(1.0)
+            .name("hit-threshold").description("连击平砍冷却阈值1").defaultValue(0.927).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> hitThreshold2 = sgGeneral.add(new DoubleSetting.Builder()
-            .name("hit-threshold-2").description("连击平砍冷却阈值2（no-cooldown 关闭时生效，50%概率选择）").defaultValue(0.843).min(0.0).max(1.0)
+            .name("hit-threshold-2").description("连击平砍冷却阈值2（50%概率选择）").defaultValue(0.843).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> critThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("crit-threshold").description("连击暴击冷却阈值（no-cooldown 关闭时生效）").defaultValue(0.7).min(0.0).max(1.0)
+            .name("crit-threshold").description("连击暴击冷却阈值").defaultValue(0.941).min(0.0).max(1.0)
             .build());
-
-    // ==================== TPS 同步 ====================
-    private final Setting<Boolean> tpsSync = sgGeneral.add(new BoolSetting.Builder()
-            .name("tps-sync").description("根据服务器 TPS 同步攻击冷却进度").defaultValue(false).build());
 
     // ==================== 战术设置 ====================
     private final Setting<Boolean> smartAirSwing = sgTactics.add(new BoolSetting.Builder()
@@ -177,9 +168,6 @@ public class TriggerBotV2 extends Module {
 
     // ========== 冷却 & TPS 同步判定 ==========
     private boolean shouldAttack() {
-        if (noCooldown.get())
-            return true;
-
         boolean isFalling = canCrit();
         double required;
         if (isFalling) {
@@ -195,15 +183,8 @@ public class TriggerBotV2 extends Module {
         return getSyncedCooldownProgress() >= 1.0f;
     }
 
-    /** 参考 KillAura 的 TPS 同步逻辑：调整 getAttackCooldownProgress 的 delay 参数 */
     private float getSyncedCooldownProgress() {
-        float delay = 0.5f;
-        if (tpsSync.get()) {
-            float tps = TickRate.INSTANCE.getTickRate();
-            if (tps > 0)
-                delay /= (tps / 20f);
-        }
-        return mc.player.getAttackCooldownProgress(delay);
+        return mc.player.getAttackCooldownProgress(0.5f);
     }
 
     private int getNearbyValidTargetsCount(double range) {
@@ -253,7 +234,7 @@ public class TriggerBotV2 extends Module {
 
     private boolean canCrit() {
         return !mc.player.isOnGround()
-                && mc.player.fallDistance > 0.0f
+                && mc.player.fallDistance > 0f
                 && !mc.player.isClimbing()
                 && !mc.player.isTouchingWater()
                 && !mc.player.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.BLINDNESS)

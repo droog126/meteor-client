@@ -16,6 +16,7 @@ import meteordevelopment.meteorclient.systems.config.Config;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.render.NametagUtils;
@@ -340,6 +341,7 @@ public class ESP extends Module {
     @Override
     public void onDeactivate() {
         cachedHealthMap.clear();
+        cachedTarget = null;
     }
 
     // ==================== Tick ====================
@@ -397,7 +399,13 @@ public class ESP extends Module {
         count = 0;
         cachedTarget = highlightTarget.get() ? getTargetEntity(100.0, event.tickDelta) : null;
 
+        double renderDist = Utils.getRenderDistance();
+        double renderDistSq = (renderDist + 1) * 16;
+        renderDistSq *= renderDistSq;
+
         for (Entity entity : mc.world.getEntities()) {
+            if (entity.squaredDistanceTo(mc.player) > renderDistSq) continue;
+
             boolean isTarget = (cachedTarget == entity);
             if (!isTarget && shouldSkip(entity)) continue;
 
@@ -447,7 +455,13 @@ public class ESP extends Module {
         count = 0;
         cachedTarget = highlightTarget.get() ? getTargetEntity(100.0, event.tickDelta) : null;
 
+        double renderDist = Utils.getRenderDistance();
+        double renderDistSq = (renderDist + 1) * 16;
+        renderDistSq *= renderDistSq;
+
         for (Entity entity : mc.world.getEntities()) {
+            if (entity.squaredDistanceTo(mc.player) > renderDistSq) continue;
+
             boolean isTarget = (cachedTarget == entity);
             if (!isTarget && shouldSkip(entity)) continue;
 

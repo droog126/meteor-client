@@ -119,7 +119,8 @@ public class UltimateSprint extends Module {
         if (instance != null) {
             instance.externalCallback = callback;
             boolean isPressW = Input.isKeyPressed(GLFW.GLFW_KEY_W);
-            instance.currentDelayTicks = (isPressW && !instance.autoUnsprintActive) ? 1 : 0;
+            boolean isSprinting = instance.mc.player != null && instance.mc.player.isSprinting();
+            instance.currentDelayTicks = (isPressW && !instance.autoUnsprintActive && isSprinting) ? 1 : 0;
         }
     }
 

@@ -189,7 +189,7 @@ public class BlockESP extends Module {
     private Set<Block> group1Blocks = Set.of();
     private Set<Block> group2Blocks = Set.of();
 
-    private ExecutorService workerThread;
+    private volatile ExecutorService workerThread;
     private int group1Counter = 0;
     private int group2Counter = 0;
 
@@ -445,6 +445,7 @@ public class BlockESP extends Module {
     @EventHandler
     private void onPostTick(TickEvent.Post event) {
         if (!isActive()) return;
+        if (mc.world == null) return;
         DimensionType dimension = mc.world.getDimension();
         if (lastDimension != dimension) onActivate();
         lastDimension = dimension;
