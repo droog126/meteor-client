@@ -139,30 +139,21 @@ public abstract class ClientPlayerEntityMixin extends AbstractClientPlayerEntity
         return entity.raycast(maxDistance, tickProgress, true);
     }
 
-    // Sprint
+    // Sprint (已简化 - 移除 Rage 模式)
 
     @ModifyExpressionValue(method = "canStartSprinting", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/input/Input;hasForwardMovement()Z"))
     private boolean modifyIsWalking(boolean original) {
-        if (!Modules.get().get(Sprint.class).rageSprint()) return original;
-
-        float forwards = Math.abs(forwardSpeed);
-        float sideways = Math.abs(sidewaysSpeed);
-
-        return (isSubmergedInWater() ? (forwards > 1.0E-5F || sideways > 1.0E-5F) : (forwards > 0.8 || sideways > 0.8));
+        return original;
     }
 
     @ModifyExpressionValue(method = "tickMovement", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/input/Input;hasForwardMovement()Z"))
     private boolean modifyMovement(boolean original) {
-        if (!Modules.get().get(Sprint.class).rageSprint()) return original;
-
-        return Math.abs(sidewaysSpeed) > 1.0E-5F || Math.abs(forwardSpeed) > 1.0E-5F;
+        return original;
     }
 
     @WrapWithCondition(method = "tickMovement", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/network/ClientPlayerEntity;setSprinting(Z)V", ordinal = 3))
     private boolean wrapSetSprinting(ClientPlayerEntity instance, boolean b) {
-        Sprint s = Modules.get().get(Sprint.class);
-
-        return !s.rageSprint() || s.unsprintInWater() && isTouchingWater();
+        return true;
     }
 
     // Rotations

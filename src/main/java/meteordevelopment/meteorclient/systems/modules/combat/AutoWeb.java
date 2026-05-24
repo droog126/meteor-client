@@ -176,7 +176,6 @@ public class AutoWeb extends Module {
 
         boolean hasWeb  = hasInHotbar(Items.COBWEB);
         boolean hasLava = hasInHotbar(Items.LAVA_BUCKET);
-        boolean holdingWeb = mc.player.getMainHandStack().isOf(Items.COBWEB);
         if (!hasWeb && !hasLava) return;
 
         double eRange = enemyRange.get();
@@ -201,7 +200,7 @@ public class AutoWeb extends Module {
 
                             if (!neighborState.isAir() && !neighborState.isReplaceable()) continue;
 
-                            boolean canWeb  = hasWeb  && canPlaceWeb(neighborPos, neighborState) && holdingWeb;
+                            boolean canWeb  = hasWeb  && canPlaceWeb(neighborPos, neighborState);
                             boolean canLava = hasLava && canPlaceLava(neighborPos, neighborState);
 
                             if (!canWeb && !canLava) continue;
@@ -282,6 +281,9 @@ public class AutoWeb extends Module {
         boolean hasWaterBucket = hasInHotbar(Items.WATER_BUCKET);
         boolean holdingWeb     = mc.player.getMainHandStack().isOf(Items.COBWEB);
 
+        // 检查是否有敌人在蜘蛛网上
+        boolean hasEnemyInCobweb = enemies.stream().anyMatch(e -> e.inCobweb);
+
         if (aimedFluid != null) {
             FluidState fs = mc.world.getBlockState(aimedFluid).getFluidState();
 
@@ -314,13 +316,16 @@ public class AutoWeb extends Module {
         if (!placeState.isAir() && !placeState.isReplaceable()) return;
         if (isAnyWater(placeState)) return;
 
-        boolean canWeb  = hasWeb  && canPlaceWeb(placePos, placeState) && holdingWeb;
+        boolean canWeb  = hasWeb  && canPlaceWeb(placePos, placeState);
         boolean canLava = hasLava && canPlaceLava(placePos, placeState);
 
         if (!canWeb && !canLava) return;
 
-        // Web 不受敌人优先级影响，只要手持 web 且可以放置就优先放置 web
-        if (canWeb) {
+        // 如果有敌人在蜘蛛网上，优先放 web
+        if (hasEnemyInCobweb && canWeb) {
+            placeAt(supportPos, face, PlaceType.WEB);
+        } else if (canWeb) {
+            // 如果有 web，优先放 web（即使没有敌人在蜘蛛网上）
             placeAt(supportPos, face, PlaceType.WEB);
         } else if (canLava) {
             int lavaPrio = calcPriority(placePos, PlaceType.LAVA, enemies, enemyRange.get());
@@ -336,30 +341,21 @@ public class AutoWeb extends Module {
     private void placeAt(BlockPos supportPos, Direction face, PlaceType type) {
         Item item = (type == PlaceType.WEB) ? Items.COBWEB : Items.LAVA_BUCKET;
         
-        // Web 只有在手持的时候才放置
-        if (type == PlaceType.WEB && !mc.player.getMainHandStack().isOf(Items.COBWEB)) {
-            return;
-        }
-        
         int slot = getSlot(item);
         if (slot == -1) return;
 
         Vec3d hitVec = Vec3d.ofCenter(supportPos).add(Vec3d.of(face.getVector()).multiply(0.5));
         if (mc.player.getEyePos().squaredDistanceTo(hitVec) > reach.get() * reach.get()) return;
 
-        // Web 不需要切换，所以也不需要保存和切回 prevSlot
-        if (type != PlaceType.WEB) {
-            if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
-            mc.player.getInventory().setSelectedSlot(slot);
-        }
+        // 都需要切换和切回
+        if (prevSlot == -1) prevSlot = mc.player.getInventory().getSelectedSlot();
+        mc.player.getInventory().setSelectedSlot(slot);
 
         Utils.rightClick();
         cd = delay.get();
         
-        // 只有 LAVA 需要切回，Web 不需要切回
-        if (type == PlaceType.LAVA) {
-            swapBackTimer = 2;
-        }
+        // 都需要切回
+        swapBackTimer = 2;
     }
 
     private void scoopFluid(BlockPos targetPos, String name) {

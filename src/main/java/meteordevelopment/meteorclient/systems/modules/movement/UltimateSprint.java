@@ -1,6 +1,7 @@
 package meteordevelopment.meteorclient.systems.modules.movement;
 
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -52,13 +53,13 @@ public class UltimateSprint extends Module {
     private Runnable externalCallback = null;
     private int currentDelayTicks = 0;
 
-    private Runnable wtapCallback = null;
-    private int wtapTicks = 0;
-    private boolean wtapActive = false;
-
     // ========== 自动预取消疾跑状态 ==========
     private boolean autoUnsprintActive = false;
     private int autoUnsprintTickCounter = 0;
+
+    // ========== 命中后跳过疾跑设置状态 ==========
+    public static boolean skipSprintSetting = false;
+    private boolean wWasReleased = false;
 
     // ========== 跳跃顶点追踪 ==========
     private boolean wasOnGround = true;
@@ -70,18 +71,30 @@ public class UltimateSprint extends Module {
     public void onActivate() {
         instance = this;
         resetRequests();
-        resetWtap();
         resetAutoUnsprint();
         resetApexTracking();
+        resetSkipSprintSetting();
     }
 
     @Override
     public void onDeactivate() {
         resetRequests();
-        resetWtap();
         resetAutoUnsprint();
         resetApexTracking();
+        resetSkipSprintSetting();
         instance = null;
+    }
+
+    private void resetSkipSprintSetting() {
+        skipSprintSetting = false;
+        wWasReleased = false;
+    }
+
+    public static void setSkipSprintSetting() {
+        if (instance != null) {
+            instance.skipSprintSetting = true;
+            instance.wWasReleased = false;
+        }
     }
 
     private void resetRequests() {
@@ -94,14 +107,7 @@ public class UltimateSprint extends Module {
         currentDelayTicks = 0;
     }
 
-    private void resetWtap() {
-        if (wtapCallback != null) {
-            wtapCallback.run();
-        }
-        wtapCallback = null;
-        wtapTicks = 0;
-        wtapActive = false;
-    }
+
 
     private void resetAutoUnsprint() {
         autoUnsprintActive = false;
@@ -117,10 +123,15 @@ public class UltimateSprint extends Module {
 
     public static void requestCritUnsprint(Runnable callback) {
         if (instance != null) {
-            instance.externalCallback = callback;
             boolean isPressW = Input.isKeyPressed(GLFW.GLFW_KEY_W);
             boolean isSprinting = instance.mc.player != null && instance.mc.player.isSprinting();
-            instance.currentDelayTicks = (isPressW && !instance.autoUnsprintActive && isSprinting) ? 1 : 0;
+            System.out.println(isPressW + " " + isSprinting + " " + skipSprintSetting);
+            if(skipSprintSetting || !isSprinting){
+                callback.run();
+                return;
+            }
+            instance.externalCallback = callback;
+            instance.currentDelayTicks = 1;
         }
     }
 
@@ -130,18 +141,9 @@ public class UltimateSprint extends Module {
         }
     }
 
-    public static void requestWSprint() {
-        if (instance != null && !instance.wtapActive) {
-            instance.wtapActive = true;
-            instance.wtapTicks = 0;
-        }
-    }
 
-    public static void clearWSprintRequest() {
-        if (instance != null) {
-            instance.resetWtap();
-        }
-    }
+
+
 
     public Entity getTarget() {
         return TriggerBotV2.currentTarget;
@@ -152,6 +154,7 @@ public class UltimateSprint extends Module {
         if (!isActive() || mc.player == null || mc.world == null)
             return;
 
+
         boolean isPressR = Input.isKeyPressed(GLFW.GLFW_KEY_R);
         if (isPressR || mc.currentScreen != null) {
             stopSprinting();
@@ -161,18 +164,37 @@ public class UltimateSprint extends Module {
             mc.options.rightKey.setPressed(false);
             resetAutoUnsprint();
             resetRequests();
-            resetWtap();
             return;
         }
 
         boolean isPressW = Input.isKeyPressed(GLFW.GLFW_KEY_W);
+
+        if (externalCallback != null) {
+            if (currentDelayTicks <= 0) {
+                resetRequests();
+            } else {
+                currentDelayTicks--;
+                mc.options.forwardKey.setPressed(false);
+                return;
+            }
+        }
+
+        // ========== 处理跳过疾跑设置状态 ==========
+        if (skipSprintSetting) {
+            if (!isPressW) {
+                // W松开了，标记已松开
+                wWasReleased = true;
+            } else if (wWasReleased) {
+                // W松开后再按下，恢复正常
+                resetSkipSprintSetting();
+            }
+        }
 
         // ========== 追踪跳跃顶点 ==========
         boolean onGround = mc.player.isOnGround();
         double velocityY = mc.player.getVelocity().y;
 
         if (!onGround && wasOnGround) {
-            // 刚离开地面
             inAir = true;
             passedApex = false;
             postApexTickCounter = 0;
@@ -215,7 +237,6 @@ public class UltimateSprint extends Module {
         // 如果处于自动预取消状态，强制停止疾跑并松开W
         if (autoUnsprintActive) {
             stopSprinting();
-            mc.options.forwardKey.setPressed(false);
             autoUnsprintTickCounter++;
 
             if (autoUnsprintTickCounter >= unsprintDurationTicks.get()) {
@@ -223,36 +244,13 @@ public class UltimateSprint extends Module {
             }
         }
 
-        if (wtapActive) {
-            wtapTicks++;
-            if (wtapTicks > 1) {
-                wtapActive = false;
-                wtapTicks = 0;
-            } else {
-                stopSprinting();
-                return;
-            }
-        }
 
-        if (externalCallback != null) {
-            if (currentDelayTicks <= 0) {
-                resetRequests();
-            } else {
-                currentDelayTicks--;
-                stopSprinting();
-                return;
-            }
-        }
-
-        if (externalCallback == null && !wtapActive && !autoUnsprintActive) {
+        if (!autoUnsprintActive) {
             if (isPressW) {
                 startSprinting();
             } else {
                 stopSprinting();
             }
-            mc.options.backKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_S));
-            mc.options.leftKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_A));
-            mc.options.rightKey.setPressed(Input.isKeyPressed(GLFW.GLFW_KEY_D));
         }
     }
 
@@ -298,20 +296,23 @@ public class UltimateSprint extends Module {
     }
 
     private void stopSprinting() {
-        mc.options.sprintKey.setPressed(false);
         mc.options.forwardKey.setPressed(false);
     }
 
     private void startSprinting() {
-        mc.options.sprintKey.setPressed(true);
         mc.options.forwardKey.setPressed(true);
+        if (skipSprintSetting) {
+            System.out.println("Skipping sprint setting");
+            return;
+        }
+        if (!mc.player.isSprinting()) {
+            KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.sprintKey;
+            accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
+        }
     }
 
-    public boolean rageSprint() {
-        return false;
-    }
 
-    public boolean unsprintInWater() {
-        return false;
-    }
+
+
+
 }

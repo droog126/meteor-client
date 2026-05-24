@@ -9,7 +9,6 @@ import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import meteordevelopment.meteorclient.settings.BoolSetting;
-import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Categories;
@@ -22,18 +21,6 @@ import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 
 public class Sprint extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-
-    public enum Mode {
-        Strict,
-        Rage
-    }
-
-    public final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
-        .name("sprint-mode")
-        .description("What mode of sprinting.")
-        .defaultValue(Mode.Strict)
-        .build()
-    );
 
     private final Setting<Boolean> keepSprint = sgGeneral.add(new BoolSetting.Builder()
         .name("keep-sprint")
@@ -49,19 +36,10 @@ public class Sprint extends Module {
         .build()
     );
 
-    public final Setting<Boolean> unsprintInWater = sgGeneral.add(new BoolSetting.Builder()
+    private final Setting<Boolean> unsprintInWater = sgGeneral.add(new BoolSetting.Builder()
         .name("unsprint-in-water")
         .description("Whether to stop sprinting when in water.")
         .defaultValue(true)
-        .visible(() -> mode.get() == Mode.Rage)
-        .build()
-    );
-
-    private final Setting<Boolean> permaSprint = sgGeneral.add(new BoolSetting.Builder()
-        .name("sprint-while-stationary")
-        .description("Sprint even when not moving.")
-        .defaultValue(false)
-        .visible(() -> mode.get() == Mode.Rage)
         .build()
     );
 
@@ -71,9 +49,9 @@ public class Sprint extends Module {
 
     @EventHandler(priority = EventPriority.HIGH)
     private void onTickMovement(TickEvent.Post event) {
-        if (unsprintInWater.get() && mc.player.isTouchingWater()) return;
-
-        mc.player.setSprinting(shouldSprint());
+        if (shouldSprint()) {
+            mc.player.setSprinting(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -92,33 +70,35 @@ public class Sprint extends Module {
         if (!(event.packet instanceof IPlayerInteractEntityC2SPacket packet)
             || packet.meteor$getType() != PlayerInteractEntityC2SPacket.InteractType.ATTACK) return;
 
-        if (!shouldSprint() || mc.player.isSprinting()) return;
-
-        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING));
-        mc.player.setSprinting(true);
+        if (shouldSprint() && !mc.player.isSprinting()) {
+            mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_SPRINTING));
+            mc.player.setSprinting(true);
+        }
     }
 
     public boolean shouldSprint() {
+        // 1. GUI 打开时检查 GUIMove 设置
         if (mc.currentScreen != null && !Modules.get().get(GUIMove.class).sprint.get()) return false;
 
-        float movement = mode.get() == Mode.Rage
-            ? (Math.abs(mc.player.forwardSpeed) + Math.abs(mc.player.sidewaysSpeed))
-            : mc.player.forwardSpeed;
+        // 2. 撞墙或潜行时不触发
+        if (mc.player.horizontalCollision || mc.player.isSneaking()) return false;
 
-        if (movement <= (mc.player.isSubmergedInWater() ? 1.0E-5F : 0.8)) {
-            if (mode.get() == Mode.Strict || !permaSprint.get()) return false;
-        }
+        // 3. 在水里/水下时不触发（根据设置）
 
-        boolean strictSprint = !(mc.player.isPartlyTouchingWater())
-            && !mc.player.hasBlindnessEffect()
-            && mc.player.hasVehicle() ? (mc.player.getVehicle().canSprintAsVehicle() && mc.player.getVehicle().isLogicalSideForUpdatingMovement()) : mc.player.getHungerManager().canSprint()
-            && (!mc.player.horizontalCollision || mc.player.collidedSoftly);
+        // 4. 完全没有移动输入时不触发（站着不动）
+        float forward = Math.abs(mc.player.forwardSpeed);
+        float sideways = Math.abs(mc.player.sidewaysSpeed);
+        if (forward <= 1.0E-5F && sideways <= 1.0E-5F) return false;
 
-        return isActive() && (mode.get() == Mode.Rage || strictSprint);
+        // 5. 其他原版限制检查
+        if (mc.player.hasBlindnessEffect()) return false;
+        if (!mc.player.hasVehicle() && !mc.player.getHungerManager().canSprint()) return false;
+
+        return true;
     }
 
     public boolean rageSprint() {
-        return isActive() && mode.get() == Mode.Rage;
+        return false;
     }
 
     public boolean unsprintInWater() {

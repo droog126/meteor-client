@@ -2,6 +2,7 @@ package meteordevelopment.meteorclient.systems.modules.combat;
 
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.mixin.MinecraftClientAccessor;
+import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
@@ -19,14 +20,14 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.scoreboard.AbstractTeam;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.Box;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
+
+import net.minecraft.util.Hand;
 
 import java.util.Set;
 
 public class TriggerBotV2 extends Module {
     public static Entity currentTarget = null;
-    
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTactics = settings.createGroup("战术 (Tactics)");
 
@@ -53,6 +54,9 @@ public class TriggerBotV2 extends Module {
             .name("crit-threshold").description("连击暴击冷却阈值").defaultValue(0.941).min(0.0).max(1.0)
             .build());
 
+    private final Setting<Boolean> swingHand = sgGeneral.add(new BoolSetting.Builder()
+            .name("swing-hand").description("攻击时挥动手臂动画").defaultValue(true).build());
+
     // ==================== 战术设置 ====================
     private final Setting<Boolean> smartAirSwing = sgTactics.add(new BoolSetting.Builder()
             .name("smart-air-swing").description("周围没人时自动空挥（每次开启仅触发1次）").defaultValue(true).build());
@@ -64,7 +68,6 @@ public class TriggerBotV2 extends Module {
     private boolean isFirstAttack = true;
     private boolean hasAirSwung = false;
 
-
     public TriggerBotV2() {
         super(Categories.Combat, "trigger-bot-v2", "首刀可设最小冷却，全局1次战术空挥，重锤瞬间破甲。");
     }
@@ -74,7 +77,7 @@ public class TriggerBotV2 extends Module {
         isFirstAttack = true;
         hasAirSwung = false;
     }
-    
+
     @Override
     public void onDeactivate() {
         currentTarget = null;
@@ -94,13 +97,12 @@ public class TriggerBotV2 extends Module {
 
         Entity target = getTarget();
         currentTarget = target;
-      
 
         // ================= 准星没有对准任何人 =================
         if (target == null) {
             if (smartAirSwing.get() && !hasAirSwung && isCooldownReady()) {
                 if (getNearbyValidTargetsCount(airSwingRange.get()) == 0) {
-                    doLeftClick();
+                    doLegitClick();
                     hasAirSwung = true;
                 }
             }
@@ -113,48 +115,70 @@ public class TriggerBotV2 extends Module {
             isFirstAttack = false;
             return;
         }
-
+        double critThreshold2 = UltimateSprint.skipSprintSetting ? critThreshold.get() : 0.77f;
         // 【首刀：按设定阈值出手，使用重置疾跑】
         if (isFirstAttack) {
-            if (getSyncedCooldownProgress() >= firstHitThreshold.get()) {
-                doSwordAttack(target);
-                isFirstAttack = false;
+            if (canCrit()) {
+                if (getSyncedCooldownProgress() >= critThreshold2) {
+                    doCritAttack(target);
+                }
+            } else {
+                if (getSyncedCooldownProgress() >= hitThreshold.get()) {
+                    doNormalAttack(target);
+                }
             }
             return;
         }
 
         if (shouldAttack()) {
-            doLeftClick();
+            doNormalAttack(target);
             return;
         }
-    }
-
-    private void doSwordAttack(Entity target) {
-        if (canCrit())
-            doCritAttack(target);
-        else
-            doNormalAttack(target);
     }
 
     // ========== 攻击执行 ==========
     /** 重置疾跑刀（首刀 & 暴击） */
     private void doCritAttack(Entity target) {
-
-        UltimateSprint.requestCritUnsprint(() -> {
-            ((MinecraftClientAccessor) mc).meteor$leftClick();
-        });
+        if (UltimateSprint.skipSprintSetting) {
+            attack(target);
+            return;
+        } else {
+            UltimateSprint.requestCritUnsprint(() -> attack(target, false));
+        }
 
     }
 
     /** 普通刀（后续平砍 & 重锤） */
     private void doNormalAttack(Entity target) {
-        ((MinecraftClientAccessor) mc).meteor$leftClick();
-
-        if (Math.random() < 0.5) UltimateSprint.requestWSprint();
+        attack(target);
     }
 
-    private void doLeftClick() {
-        ((MinecraftClientAccessor) mc).meteor$leftClick();
+    private void doLegitClick() {
+        KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.attackKey;
+        accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
+    }
+
+    private void attack(Entity target) {
+        attack(target, false);
+    }
+
+    private void attack(Entity target, boolean isLegit) {
+
+        if (mc.options.forwardKey.isPressed() && !UltimateSprint.skipSprintSetting) {
+            UltimateSprint.setSkipSprintSetting();
+        }
+
+        if (isLegit) {
+            doLegitClick();
+        } else {
+            doLegitClick();
+            // mc.interactionManager.attackEntity(mc.player, target);
+            // if (swingHand.get())
+            //     mc.player.swingHand(Hand.MAIN_HAND);
+        }
+
+        // 检查是否处于疾跑且W键按下，如果是则设置跳过疾跑设置状态
+
     }
 
     private Entity getTarget() {
@@ -169,9 +193,10 @@ public class TriggerBotV2 extends Module {
     // ========== 冷却 & TPS 同步判定 ==========
     private boolean shouldAttack() {
         boolean isFalling = canCrit();
+        double critThreshold2 = UltimateSprint.skipSprintSetting ? critThreshold.get() : 0.77f;
         double required;
         if (isFalling) {
-            required = critThreshold.get();
+            required = critThreshold2;
         } else {
             required = Math.random() < 0.5 ? hitThreshold.get() : hitThreshold2.get();
         }
@@ -227,9 +252,9 @@ public class TriggerBotV2 extends Module {
     private boolean isHoldingNonCombatItem() {
         ItemStack stack = mc.player.getMainHandStack();
         return stack.isOf(Items.COBWEB)
-            || stack.isOf(Items.LAVA_BUCKET)
-            || stack.isOf(Items.WATER_BUCKET)
-            || stack.isOf(Items.BUCKET);
+                || stack.isOf(Items.LAVA_BUCKET)
+                || stack.isOf(Items.WATER_BUCKET)
+                || stack.isOf(Items.BUCKET);
     }
 
     private boolean canCrit() {
@@ -240,7 +265,5 @@ public class TriggerBotV2 extends Module {
                 && !mc.player.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.BLINDNESS)
                 && mc.player.getVehicle() == null;
     }
-
-
 
 }

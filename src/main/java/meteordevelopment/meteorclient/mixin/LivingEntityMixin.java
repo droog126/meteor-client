@@ -121,16 +121,6 @@ public abstract class LivingEntityMixin extends Entity {
 
     @ModifyExpressionValue(method = "jump", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/LivingEntity;getYaw()F"))
     private float modifyGetYaw(float original) {
-        if ((Object) this != mc.player) return original;
-        if (!Modules.get().get(Sprint.class).rageSprint()) return original;
-
-        float forward = Math.signum(mc.player.forwardSpeed);
-        float strafe = 90 * Math.signum(mc.player.sidewaysSpeed);
-        if (forward != 0) strafe *= (forward * 0.5f);
-
-        original -= strafe;
-        if (forward < 0) original -= 180;
-
         return original;
     }
 
@@ -143,10 +133,6 @@ public abstract class LivingEntityMixin extends Entity {
 
     @ModifyExpressionValue(method = "jump", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/LivingEntity;isSprinting()Z"))
     private boolean modifyIsSprinting(boolean original) {
-        if ((Object) this != mc.player) return original;
-        if (!Modules.get().get(Sprint.class).rageSprint()) return original;
-
-        // only add the extra velocity if you're actually moving, otherwise you'll jump in place and move forward
-        return original && (Math.abs(mc.player.forwardSpeed) > 1.0E-5F || Math.abs(mc.player.sidewaysSpeed) > 1.0E-5F);
+        return original;
     }
 }

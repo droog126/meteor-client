@@ -402,7 +402,9 @@ public class Modules extends System<Modules> {
 
     private void initCombat() {
         add(new TriggerBotV2());
+        add(new JumpReset());
         add(new UltimateSprint());
+        add(new FastPlace());
        
 
 
