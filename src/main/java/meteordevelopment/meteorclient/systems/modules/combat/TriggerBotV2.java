@@ -4,6 +4,7 @@ import meteordevelopment.meteorclient.events.entity.player.AttackEntityEvent;
 import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
+import meteordevelopment.meteorclient.mixin.MinecraftClientAccessor;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
@@ -297,9 +298,10 @@ public class TriggerBotV2 extends Module {
     }
 
     private void doLegitClick() {
-        KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.attackKey;
-        accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
-        
+        // KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.attackKey;
+        // accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
+        ((MinecraftClientAccessor) mc).meteor$leftClick();
+
     }
 
     private void attack(Entity target) {
