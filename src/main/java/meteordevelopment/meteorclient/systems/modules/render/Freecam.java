@@ -153,7 +153,7 @@ public class Freecam extends Module {
     private double fovScale;
     private boolean bobView;
 
-    private boolean forward, backward, right, left, up, down, isSneaking;
+    private boolean isSneaking;
 
     private long clickTs = 0;
 
@@ -187,13 +187,6 @@ public class Freecam extends Module {
         lastPitch = pitch;
 
         isSneaking = mc.options.sneakKey.isPressed();
-
-        forward = Input.isPressed(mc.options.forwardKey);
-        backward = Input.isPressed(mc.options.backKey);
-        right = Input.isPressed(mc.options.rightKey);
-        left = Input.isPressed(mc.options.leftKey);
-        up = Input.isPressed(mc.options.jumpKey);
-        down = Input.isPressed(mc.options.sneakKey);
 
         unpress();
         if (reloadChunks.get()) mc.worldRenderer.reload();
@@ -264,25 +257,28 @@ public class Freecam extends Module {
         double s = 0.5;
         if (Input.isPressed(mc.options.sprintKey)) s = 1;
 
+        // 直接检测 GLFW 物理键状态，松开立即停止
+        long window = mc.getWindow().getHandle();
+
         boolean a = false;
-        if (this.forward) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_W) == GLFW.GLFW_PRESS) {
             velX += forward.x * s * speedValue;
             velZ += forward.z * s * speedValue;
             a = true;
         }
-        if (this.backward) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_S) == GLFW.GLFW_PRESS) {
             velX -= forward.x * s * speedValue;
             velZ -= forward.z * s * speedValue;
             a = true;
         }
 
         boolean b = false;
-        if (this.right) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_D) == GLFW.GLFW_PRESS) {
             velX += right.x * s * speedValue;
             velZ += right.z * s * speedValue;
             b = true;
         }
-        if (this.left) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_A) == GLFW.GLFW_PRESS) {
             velX -= right.x * s * speedValue;
             velZ -= right.z * s * speedValue;
             b = true;
@@ -294,23 +290,15 @@ public class Freecam extends Module {
             velZ *= diagonal;
         }
 
-        if (this.up) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_SPACE) == GLFW.GLFW_PRESS) {
             velY += s * speedValue;
         }
-        if (this.down) {
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_SHIFT) == GLFW.GLFW_PRESS) {
             velY -= s * speedValue;
         }
 
         prevPos.set(pos);
         pos.set(pos.x + velX, pos.y + velY, pos.z + velZ);
-    }
-
-    @EventHandler(priority = EventPriority.HIGH)
-    public void onKey(KeyEvent event) {
-        if (Input.isKeyPressed(GLFW.GLFW_KEY_F3)) return;
-        if (checkGuiMove()) return;
-
-        if (onInput(event.key(), event.action)) event.cancel();
     }
 
     @Nullable
@@ -344,7 +332,6 @@ public class Freecam extends Module {
         BlockHitResult res = mc.world.raycast(ctx);
         if (res.getType() == HitResult.Type.MISS) return null;
 
-        // Don't move inside block
         return res.getBlockPos().add(res.getSide().getVector());
     }
 
@@ -377,40 +364,6 @@ public class Freecam extends Module {
         if (baritoneClick.get() && event.action == KeyAction.Press && mc.options.attackKey.matchesMouse(event.click)) {
             setGoal();
         }
-
-        if (onInput(event.button(), event.action)) event.cancel();
-    }
-
-    private boolean onInput(int key, KeyAction action) {
-        if (Input.getKey(mc.options.forwardKey) == key) {
-            forward = action != KeyAction.Release;
-            mc.options.forwardKey.setPressed(false);
-        }
-        else if (Input.getKey(mc.options.backKey) == key) {
-            backward = action != KeyAction.Release;
-            mc.options.backKey.setPressed(false);
-        }
-        else if (Input.getKey(mc.options.rightKey) == key) {
-            right = action != KeyAction.Release;
-            mc.options.rightKey.setPressed(false);
-        }
-        else if (Input.getKey(mc.options.leftKey) == key) {
-            left = action != KeyAction.Release;
-            mc.options.leftKey.setPressed(false);
-        }
-        else if (Input.getKey(mc.options.jumpKey) == key) {
-            up = action != KeyAction.Release;
-            mc.options.jumpKey.setPressed(false);
-        }
-        else if (Input.getKey(mc.options.sneakKey) == key) {
-            down = action != KeyAction.Release;
-            mc.options.sneakKey.setPressed(false);
-        }
-        else {
-            return false;
-        }
-
-        return true;
     }
 
     @EventHandler(priority = EventPriority.LOW)

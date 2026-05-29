@@ -194,6 +194,13 @@ public class Nametags extends Module {
         .build()
     );
 
+    private final Setting<Boolean> showPing = sgPlayers.add(new BoolSetting.Builder()
+        .name("show-ping")
+        .description("Show player's ping.")
+        .defaultValue(false)
+        .build()
+    );
+
     // Render
     private final Setting<SettingColor> background = sgRender.add(new ColorSetting.Builder()
         .name("background-color")
@@ -451,18 +458,34 @@ public class Nametags extends Module {
             distText = dist + "m";
         }
 
+        // ── 4. Ping ──
+        boolean showP = showPing.get();
+        String pingText = "";
+
+        if (showP) {
+            int ping = 0;
+            if (mc.getNetworkHandler() != null) {
+                var entry = mc.getNetworkHandler().getPlayerListEntry(player.getUuid());
+                if (entry != null) {
+                    ping = entry.getLatency();
+                }
+            }
+            pingText = ping + "ms";
+        }
+
         // ── 计算全局动态布局 ──
         double lineH = text.getHeight(shadow);
         double hpW   = text.getWidth(hpText, shadow);
         double redW  = showReduction ? text.getWidth(" " + reductionText, shadow) : 0;
         double distW = showDist      ? text.getWidth(distText, shadow)      : 0;
+        double pingW = showP         ? text.getWidth(pingText, shadow)      : 0;
 
         // 血量和护甲在同一行，取最宽的
         double firstLineW = hpW + (showReduction ? redW : 0);
-        double maxW  = Math.max(firstLineW, distW);
+        double maxW  = Math.max(firstLineW, Math.max(distW, pingW));
         double halfW = maxW / 2;
 
-        int lines = 1 + (showDist ? 1 : 0);
+        int lines = 1 + (showDist ? 1 : 0) + (showP ? 1 : 0);
         double totalH = lineH * lines;
 
         drawBg(-halfW, -totalH, maxW, totalH);
@@ -483,6 +506,11 @@ public class Nametags extends Module {
 
         if (showDist) {
             text.render(distText, -distW / 2, y, EntityUtils.getColorFromDistance(player), shadow);
+            y += lineH;
+        }
+
+        if (showP) {
+            text.render(pingText, -pingW / 2, y, textColor.set(200, 200, 200, 255), shadow);
         }
 
         text.end();

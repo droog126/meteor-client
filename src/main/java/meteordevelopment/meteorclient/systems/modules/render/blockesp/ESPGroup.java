@@ -20,6 +20,11 @@ import java.util.Set;
 public class ESPGroup {
     private static final BlockESP blockEsp = Modules.get().get(BlockESP.class);
     private static final Color styledTracerColor = new Color();
+    // 复用 ObjectOpenHashSet 以减少 GC
+    private static final ThreadLocal<ObjectOpenHashSet<ESPBlock>> NEIGHBOURS_SET = 
+        ThreadLocal.withInitial(() -> new ObjectOpenHashSet<>(6));
+    private static final ThreadLocal<ObjectOpenHashSet<ESPBlock>> REMAINING_SET = 
+        ThreadLocal.withInitial(() -> new ObjectOpenHashSet<>());
 
     public final int id;
     public final int groupNumber;
@@ -66,7 +71,8 @@ public class ESPGroup {
     }
 
     private void trySplit(ESPBlock block) {
-        Set<ESPBlock> neighbours = new ObjectOpenHashSet<>(6);
+        ObjectOpenHashSet<ESPBlock> neighbours = NEIGHBOURS_SET.get();
+        neighbours.clear();
 
         for (int side : ESPBlock.SIDES) {
             if ((block.neighbours & side) == side) {
@@ -76,7 +82,10 @@ public class ESPGroup {
         }
         if (neighbours.size() <= 1) return;
 
-        Set<ESPBlock> remainingBlocks = new ObjectOpenHashSet<>(blocks);
+        ObjectOpenHashSet<ESPBlock> remainingBlocks = REMAINING_SET.get();
+        remainingBlocks.clear();
+        remainingBlocks.addAll(blocks);
+        
         Queue<ESPBlock> blocksToCheck = new ArrayDeque<>();
 
         blocksToCheck.offer(blocks.getFirst());

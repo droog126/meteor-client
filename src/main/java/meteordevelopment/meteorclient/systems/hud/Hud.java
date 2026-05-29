@@ -133,6 +133,7 @@ public class Hud extends System<Hud> implements Iterable<HudElement> {
         register(MapHud.INFO);
         register(KeyboardHud.INFO);
         register(JumpResetHud.INFO);
+        register(TriggerBotDebugHud.INFO);
 
         // Default config
         if (isFirstInit) resetToDefaultElements();

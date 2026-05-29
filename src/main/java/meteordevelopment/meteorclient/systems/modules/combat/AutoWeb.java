@@ -324,10 +324,8 @@ public class AutoWeb extends Module {
         // 如果有敌人在蜘蛛网上，优先放 web
         if (hasEnemyInCobweb && canWeb) {
             placeAt(supportPos, face, PlaceType.WEB);
-        } else if (canWeb) {
-            // 如果有 web，优先放 web（即使没有敌人在蜘蛛网上）
-            placeAt(supportPos, face, PlaceType.WEB);
         } else if (canLava) {
+            // 没有敌人在蜘蛛网上，优先放岩浆
             int lavaPrio = calcPriority(placePos, PlaceType.LAVA, enemies, enemyRange.get());
             if (lavaPrio > 0) {
                 placeAt(supportPos, face, PlaceType.LAVA);
@@ -335,6 +333,9 @@ public class AutoWeb extends Module {
                 // 即使优先级为 0 也放岩浆（保持原来的逻辑）
                 placeAt(supportPos, face, PlaceType.LAVA);
             }
+        } else if (canWeb) {
+            // 最后才考虑放 web
+            placeAt(supportPos, face, PlaceType.WEB);
         }
     }
 

@@ -1,32 +1,63 @@
 package meteordevelopment.meteorclient.systems.modules.combat;
 
+import meteordevelopment.meteorclient.events.entity.player.AttackEntityEvent;
+import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixin.MinecraftClientAccessor;
 import meteordevelopment.meteorclient.mixin.KeyBindingAccessor;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.movement.UltimateSprint;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.item.ItemStack;
 import net.minecraft.scoreboard.AbstractTeam;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 
-import net.minecraft.util.Hand;
-
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 public class TriggerBotV2 extends Module {
     public static Entity currentTarget = null;
+    public static final List<AttackRecord> attackRecords = new ArrayList<>();
+    private static final int MAX_RECORDS = 5;
+
+    public enum TargetAcquisition {
+        CROSSHAIR(" (Crosshair)"),
+        RAYCAST(" (Raycast)");
+
+        public final String displayName;
+
+        TargetAcquisition(String displayName) {
+            this.displayName = displayName;
+        }
+    }
+
+    public static class TargetResult {
+        public final Entity target;
+        public final TargetAcquisition acquisition;
+
+        public TargetResult(Entity target, TargetAcquisition acquisition) {
+            this.target = target;
+            this.acquisition = acquisition;
+        }
+    }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTactics = settings.createGroup("战术 (Tactics)");
@@ -43,11 +74,7 @@ public class TriggerBotV2 extends Module {
             .build());
 
     private final Setting<Double> hitThreshold = sgGeneral.add(new DoubleSetting.Builder()
-            .name("hit-threshold").description("连击平砍冷却阈值1").defaultValue(0.927).min(0.0).max(1.0)
-            .build());
-
-    private final Setting<Double> hitThreshold2 = sgGeneral.add(new DoubleSetting.Builder()
-            .name("hit-threshold-2").description("连击平砍冷却阈值2（50%概率选择）").defaultValue(0.843).min(0.0).max(1.0)
+            .name("hit-threshold").description("连击平砍冷却阈值").defaultValue(0.927).min(0.0).max(1.0)
             .build());
 
     private final Setting<Double> critThreshold = sgGeneral.add(new DoubleSetting.Builder()
@@ -64,9 +91,26 @@ public class TriggerBotV2 extends Module {
     private final Setting<Double> airSwingRange = sgTactics.add(new DoubleSetting.Builder()
             .name("air-swing-range").description("探测周围没人的范围").defaultValue(4.5).visible(smartAirSwing::get).build());
 
+    private final Setting<Double> attackRangeBonus = sgTactics.add(new DoubleSetting.Builder()
+            .name("attack-range-bonus").description("额外攻击距离（叠加在原版上）").defaultValue(0.03).min(0.0).max(1.0)
+            .sliderMax(1.0).build());
+
     // ==================== 状态记录 ====================
     private boolean isFirstAttack = true;
-    private boolean hasAirSwung = false;
+    private boolean hasDoneAirSwing = false;  // 标记是否已完成本次激活的空挥
+
+    // 攻击前快照（用于记录真实冷却）
+    private float snapshotCooldown = 0f;
+    private double snapshotDistance = 0;
+    private boolean snapshotIsCrit = false;
+    private TargetAcquisition snapshotAcquisition = null;
+
+    // 记录标记（防止与 AttackEntityEvent 重复记录）
+    private Entity pendingRecordTarget = null;
+
+    // 鼠标按下检测
+    private boolean wasMouseDown = false;
+    private boolean isMouseDown = false;
 
     public TriggerBotV2() {
         super(Categories.Combat, "trigger-bot-v2", "首刀可设最小冷却，全局1次战术空挥，重锤瞬间破甲。");
@@ -75,7 +119,29 @@ public class TriggerBotV2 extends Module {
     @Override
     public void onActivate() {
         isFirstAttack = true;
-        hasAirSwung = false;
+        isMouseDown = false;
+        wasMouseDown = false;
+        hasDoneAirSwing = false;  // 重置空挥标记
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    private void onMouseClick(MouseClickEvent event) {
+        if (!isActive())
+            return;
+
+        // 只处理左键
+        if (event.button() != 0)
+            return;
+
+        if (event.action == KeyAction.Press) {
+            isMouseDown = true;
+            if (!wasMouseDown) {
+                isFirstAttack = true;
+            }
+        } else if (event.action == KeyAction.Release) {
+            isMouseDown = false;
+        }
+        wasMouseDown = isMouseDown;
     }
 
     @Override
@@ -89,21 +155,27 @@ public class TriggerBotV2 extends Module {
             currentTarget = null;
             return;
         }
+        // 鼠标没按下，不做任何事
+        if (!isMouseDown) {
+            currentTarget = null;
+            return;
+        }
 
         if (isHoldingNonCombatItem()) {
             currentTarget = null;
             return;
         }
 
-        Entity target = getTarget();
+        TargetResult targetResult = getTarget();
+        Entity target = targetResult.target;
         currentTarget = target;
 
-        // ================= 准星没有对准任何人 =================
+        // 准星没对准任何人
         if (target == null) {
-            if (smartAirSwing.get() && !hasAirSwung && isCooldownReady()) {
+            // 空挥：鼠标按下 + 周围没人（无冷却限制，可连续挥）
+            if (smartAirSwing.get()) {
                 if (getNearbyValidTargetsCount(airSwingRange.get()) == 0) {
                     doLegitClick();
-                    hasAirSwung = true;
                 }
             }
             return;
@@ -111,19 +183,26 @@ public class TriggerBotV2 extends Module {
 
         // 【重锤：永远无视任何冷却直接砸】
         if (isMace() && mc.player.fallDistance >= 1.5f) {
+            saveAttackSnapshot(target, targetResult.acquisition);
             doNormalAttack(target);
-            isFirstAttack = false;
             return;
         }
-        double critThreshold2 = UltimateSprint.skipSprintSetting ? critThreshold.get() : 0.77f;
         // 【首刀：按设定阈值出手，使用重置疾跑】
         if (isFirstAttack) {
-            if (canCrit()) {
-                if (getSyncedCooldownProgress() >= critThreshold2) {
-                    doCritAttack(target);
-                }
+            boolean isFalling = canCrit();
+            double required;
+            if (isFalling) {
+                required = critThreshold.get();
             } else {
-                if (getSyncedCooldownProgress() >= hitThreshold.get()) {
+                required = firstHitThreshold.get();
+            }
+
+            if (getSyncedCooldownProgress() >= required) {
+                if (canCrit()) {
+                    saveAttackSnapshot(target, targetResult.acquisition);
+                    doCritAttack(target);
+                } else {
+                    saveAttackSnapshot(target, targetResult.acquisition);
                     doNormalAttack(target);
                 }
             }
@@ -131,14 +210,67 @@ public class TriggerBotV2 extends Module {
         }
 
         if (shouldAttack()) {
+            saveAttackSnapshot(target, targetResult.acquisition);
             doNormalAttack(target);
             return;
         }
     }
 
+    // 保存攻击前快照（真实冷却值）
+    private void saveAttackSnapshot(Entity target, TargetAcquisition acquisition) {
+        snapshotCooldown = getSyncedCooldownProgress();
+        snapshotDistance = Math.sqrt(
+                Math.pow(mc.player.getX() - target.getX(), 2) +
+                        Math.pow(mc.player.getY() - target.getY(), 2) +
+                        Math.pow(mc.player.getZ() - target.getZ(), 2));
+        snapshotIsCrit = canCrit();
+        snapshotAcquisition = acquisition;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    private void onAttackEntity(AttackEntityEvent event) {
+        if (!isActive() || mc.player == null || mc.world == null)
+            return;
+
+        Entity target = event.entity;
+        if (target == null)
+            return;
+
+        // 如果已经记录过了（通过 doCritAttack/doNormalAttack），防止重复记录
+        if (pendingRecordTarget != null && pendingRecordTarget == target) {
+            return;
+        }
+
+        // 使用攻击前快照的值（真实冷却）
+        recordAttack(target, snapshotCooldown, snapshotDistance, UltimateSprint.skipSprintSetting, snapshotIsCrit,
+                snapshotAcquisition);
+
+        // 首刀标记
+        if (isFirstAttack) {
+            isFirstAttack = false;
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOW)
+    private void onPostTick(TickEvent.Post event) {
+        // 清除待记录标记
+        pendingRecordTarget = null;
+    }
+
     // ========== 攻击执行 ==========
     /** 重置疾跑刀（首刀 & 暴击） */
     private void doCritAttack(Entity target) {
+        // 立即记录攻击（不依赖 AttackEntityEvent）
+        if (pendingRecordTarget == null) {
+            recordAttack(target, snapshotCooldown, snapshotDistance, UltimateSprint.skipSprintSetting, snapshotIsCrit,
+                    snapshotAcquisition);
+            pendingRecordTarget = target;
+        }
+        // 首刀标记
+        if (isFirstAttack) {
+            isFirstAttack = false;
+        }
+
         if (UltimateSprint.skipSprintSetting) {
             attack(target);
             return;
@@ -150,12 +282,24 @@ public class TriggerBotV2 extends Module {
 
     /** 普通刀（后续平砍 & 重锤） */
     private void doNormalAttack(Entity target) {
+        // 立即记录攻击（不依赖 AttackEntityEvent）
+        if (pendingRecordTarget == null) {
+            recordAttack(target, snapshotCooldown, snapshotDistance, UltimateSprint.skipSprintSetting, snapshotIsCrit,
+                    snapshotAcquisition);
+            pendingRecordTarget = target;
+        }
+        // 首刀标记
+        if (isFirstAttack) {
+            isFirstAttack = false;
+        }
+
         attack(target);
     }
 
     private void doLegitClick() {
         KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.attackKey;
         accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
+        
     }
 
     private void attack(Entity target) {
@@ -163,7 +307,6 @@ public class TriggerBotV2 extends Module {
     }
 
     private void attack(Entity target, boolean isLegit) {
-
         if (mc.options.forwardKey.isPressed() && !UltimateSprint.skipSprintSetting) {
             UltimateSprint.setSkipSprintSetting();
         }
@@ -172,33 +315,76 @@ public class TriggerBotV2 extends Module {
             doLegitClick();
         } else {
             doLegitClick();
-            // mc.interactionManager.attackEntity(mc.player, target);
-            // if (swingHand.get())
-            //     mc.player.swingHand(Hand.MAIN_HAND);
         }
-
-        // 检查是否处于疾跑且W键按下，如果是则设置跳过疾跑设置状态
-
     }
 
-    private Entity getTarget() {
+    private TargetResult getTarget() {
+        // 优先准星
         if (mc.crosshairTarget instanceof EntityHitResult entityHit) {
             Entity entity = entityHit.getEntity();
             if (isValid(entity))
-                return entity;
+                return new TargetResult(entity, TargetAcquisition.CROSSHAIR);
         }
+
         return null;
+        // 原版射线检测（眼睛到目标）
+        // Entity target = getTargetByRayCast();
+        // return new TargetResult(target, target != null ? TargetAcquisition.RAYCAST : null);
+    }
+
+    /**
+     * 原版逻辑：从眼睛射射线到目标 hitbox
+     */
+    private Entity getTargetByRayCast() {
+        double baseReach = mc.player.getAttributeValue(EntityAttributes.ENTITY_INTERACTION_RANGE);
+        double reach = baseReach + attackRangeBonus.get();
+
+        Vec3d eyePos = mc.player.getEyePos();
+        Vec3d lookVec = mc.player.getRotationVec(1.0f);
+        Vec3d endPos = eyePos.add(lookVec.multiply(reach));
+
+        Box searchBox = mc.player.getBoundingBox()
+                .expand(reach)
+                .union(new Box(eyePos, endPos));
+
+        Entity bestTarget = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (Entity candidate : mc.world.getOtherEntities(mc.player, searchBox, this::isValid)) {
+            // 射线检测：准心是否对着目标
+            Box hitbox = candidate.getBoundingBox();
+            Optional<Vec3d> hit = hitbox.raycast(eyePos, endPos);
+            if (hit.isEmpty())
+                continue;
+
+            // 视线检测：眼部到目标之间无方块遮挡（原版逻辑）
+            BlockHitResult blockHit = mc.world.raycast(new RaycastContext(
+                    eyePos,
+                    new Vec3d(candidate.getX(), candidate.getY(), candidate.getZ()),
+                    RaycastContext.ShapeType.COLLIDER,
+                    RaycastContext.FluidHandling.NONE,
+                    mc.player));
+            if (blockHit.getType() != HitResult.Type.MISS)
+                continue;
+
+            double dist = eyePos.squaredDistanceTo(hit.get());
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestTarget = candidate;
+            }
+        }
+
+        return bestTarget;
     }
 
     // ========== 冷却 & TPS 同步判定 ==========
     private boolean shouldAttack() {
         boolean isFalling = canCrit();
-        double critThreshold2 = UltimateSprint.skipSprintSetting ? critThreshold.get() : 0.77f;
         double required;
         if (isFalling) {
-            required = critThreshold2;
+            required = critThreshold.get();
         } else {
-            required = Math.random() < 0.5 ? hitThreshold.get() : hitThreshold2.get();
+            required = hitThreshold.get();
         }
         float progress = getSyncedCooldownProgress();
         return progress >= required;
@@ -266,4 +452,33 @@ public class TriggerBotV2 extends Module {
                 && mc.player.getVehicle() == null;
     }
 
+    public static void recordAttack(Entity target, float cooldownUsed, double distance, boolean skipSprint,
+            boolean isCrit, TargetAcquisition acquisition) {
+        AttackRecord record = new AttackRecord();
+        record.targetName = target.getName().getString();
+        record.cooldownUsed = cooldownUsed;
+        record.distance = distance;
+        record.skipSprint = skipSprint;
+        record.isCrit = isCrit;
+        record.acquisition = acquisition;
+        record.timestamp = System.currentTimeMillis();
+
+        attackRecords.add(0, record);
+        if (attackRecords.size() > MAX_RECORDS) {
+            attackRecords.remove(attackRecords.size() - 1);
+        }
+    }
+
+    public static class AttackRecord {
+        public String targetName;
+        public float cooldownUsed;
+        public double distance;
+        public boolean skipSprint;
+        public boolean isCrit;
+        public TargetAcquisition acquisition;
+        public long timestamp;
+
+        public AttackRecord() {
+        }
+    }
 }

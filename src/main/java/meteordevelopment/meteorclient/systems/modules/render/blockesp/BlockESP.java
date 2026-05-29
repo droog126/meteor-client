@@ -32,10 +32,12 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.dimension.DimensionType;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -189,6 +191,21 @@ public class BlockESP extends Module {
     private Set<Block> group1Blocks = Set.of();
     private Set<Block> group2Blocks = Set.of();
 
+    // 批处理方块更新
+    private static class BlockUpdateInfo {
+        final int x, y, z;
+        final Block oldBlock;
+        final Block newBlock;
+        BlockUpdateInfo(int x, int y, int z, Block oldBlock, Block newBlock) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.oldBlock = oldBlock;
+            this.newBlock = newBlock;
+        }
+    }
+    private final Set<BlockUpdateInfo> pendingBlockUpdates = ConcurrentHashMap.newKeySet();
+
     private volatile ExecutorService workerThread;
     private int group1Counter = 0;
     private int group2Counter = 0;
@@ -207,7 +224,7 @@ public class BlockESP extends Module {
 
         // Fix #5: 每次激活时创建新的线程池（防止上次 deactivate 后残留关闭状态）
         if (workerThread == null || workerThread.isShutdown()) {
-            workerThread = Executors.newFixedThreadPool(2);
+            workerThread = Executors.newSingleThreadExecutor();
         }
 
         synchronized (chunks) {
@@ -392,14 +409,10 @@ public class BlockESP extends Module {
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
         if (!isActive()) return;
-        // Fix #2: 在主线程立刻捕获坐标为局部 int，避免 Mutable 成员变量跨线程竞态
+        // 在主线程立刻捕获坐标为局部 int，避免 Mutable 成员变量跨线程竞态
         final int bx = event.pos.getX();
         final int by = event.pos.getY();
         final int bz = event.pos.getZ();
-
-        final int chunkX = bx >> 4;
-        final int chunkZ = bz >> 4;
-        final long key   = ChunkPos.toLong(chunkX, chunkZ);
 
         Block newBlock = event.newState.getBlock();
         Block oldBlock = event.oldState.getBlock();
@@ -412,34 +425,13 @@ public class BlockESP extends Module {
         boolean newInAny = newInGroup1 || newInGroup2;
         boolean oldInAny = oldInGroup1 || oldInGroup2;
 
-        final boolean added   = newInAny && !oldInAny;
+        final boolean added = newInAny && !oldInAny;
         final boolean removed = !newInAny && oldInAny;
 
         if (!added && !removed) return;
 
-        submitWorker(() -> {
-            synchronized (chunks) {
-                ESPChunk chunk = chunks.get(key);
-
-                if (chunk == null) {
-                    chunk = new ESPChunk(chunkX, chunkZ);
-                    if (chunk.shouldBeDeleted()) return;
-                    chunks.put(key, chunk);
-                }
-
-                if (added) chunk.add(bx, by, bz, true);
-                else chunk.remove(bx, by, bz);
-
-                for (int x = -1; x < 2; x++) {
-                    for (int z = -1; z < 2; z++) {
-                        for (int y = -1; y < 2; y++) {
-                            if (x == 0 && y == 0 && z == 0) continue;
-                            updateBlock(bx + x, by + y, bz + z);
-                        }
-                    }
-                }
-            }
-        });
+        // 加入 pending 队列
+        pendingBlockUpdates.add(new BlockUpdateInfo(bx, by, bz, oldBlock, newBlock));
     }
 
     @EventHandler
@@ -454,6 +446,15 @@ public class BlockESP extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (!isActive()) return;
+        
+        // 处理批处理方块更新
+        if (!pendingBlockUpdates.isEmpty()) {
+            Set<BlockUpdateInfo> batch = new HashSet<>(pendingBlockUpdates);
+            pendingBlockUpdates.clear();
+            
+            submitWorker(() -> processBatch(batch));
+        }
+
         if (enableGroupKeybinds.get()) {
             boolean isGroup1KeyPressed = group1Key.get().isPressed();
             boolean isGroup2KeyPressed = group2Key.get().isPressed();
@@ -474,6 +475,51 @@ public class BlockESP extends Module {
         } else {
             wasGroup1KeyPressed = false;
             wasGroup2KeyPressed = false;
+        }
+    }
+
+    private void processBatch(Set<BlockUpdateInfo> batch) {
+        synchronized (chunks) {
+            for (BlockUpdateInfo info : batch) {
+                final int bx = info.x;
+                final int by = info.y;
+                final int bz = info.z;
+                
+                final int chunkX = bx >> 4;
+                final int chunkZ = bz >> 4;
+                final long key = ChunkPos.toLong(chunkX, chunkZ);
+
+                boolean newInGroup1 = isInGroup1(info.newBlock);
+                boolean newInGroup2 = isInGroup2(info.newBlock);
+                boolean oldInGroup1 = isInGroup1(info.oldBlock);
+                boolean oldInGroup2 = isInGroup2(info.oldBlock);
+
+                boolean newInAny = newInGroup1 || newInGroup2;
+                boolean oldInAny = oldInGroup1 || oldInGroup2;
+
+                final boolean added = newInAny && !oldInAny;
+                final boolean removed = !newInAny && oldInAny;
+
+                ESPChunk chunk = chunks.get(key);
+
+                if (chunk == null) {
+                    chunk = new ESPChunk(chunkX, chunkZ);
+                    if (chunk.shouldBeDeleted()) continue;
+                    chunks.put(key, chunk);
+                }
+
+                if (added) chunk.add(bx, by, bz, true);
+                else chunk.remove(bx, by, bz);
+
+                for (int x = -1; x < 2; x++) {
+                    for (int z = -1; z < 2; z++) {
+                        for (int y = -1; y < 2; y++) {
+                            if (x == 0 && y == 0 && z == 0) continue;
+                            updateBlock(bx + x, by + y, bz + z);
+                        }
+                    }
+                }
+            }
         }
     }
 

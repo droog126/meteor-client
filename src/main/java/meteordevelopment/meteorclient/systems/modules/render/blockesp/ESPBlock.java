@@ -20,6 +20,7 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 public class ESPBlock {
     private static final Color styledLineColor = new Color();
     private static final Color styledSideColor = new Color();
+    private static final ThreadLocal<BlockPos.Mutable> MUTABLE_POS = ThreadLocal.withInitial(BlockPos.Mutable::new);
 
     private static final BlockESP blockEsp = Modules.get().get(BlockESP.class);
 
@@ -127,7 +128,7 @@ public class ESPBlock {
     }
 
     public void update() {
-        BlockPos.Mutable blockPos = new BlockPos.Mutable();
+        BlockPos.Mutable blockPos = MUTABLE_POS.get();
         state = mc.world.getBlockState(blockPos.set(x, y, z));
         neighbours = 0;
 

@@ -10,6 +10,7 @@ import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.systems.modules.combat.TriggerBotV2;
+import meteordevelopment.meteorclient.systems.modules.render.Freecam;
 import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
@@ -18,7 +19,7 @@ import net.minecraft.entity.Entity;
 import org.lwjgl.glfw.GLFW;
 
 public class UltimateSprint extends Module {
-    public static UltimateSprint instance;
+    public static UltimateSprint instance = null;
 
     private final SettingGroup sgPredict = settings.createGroup("预判暴击 (Predict Crit)");
 
@@ -48,6 +49,7 @@ public class UltimateSprint extends Module {
 
     public UltimateSprint() {
         super(Categories.Movement, "ultimate-sprint", "Smart W-Tap: Handles attack callbacks with configurable delay.");
+        instance = this;
     }
 
     private Runnable externalCallback = null;
@@ -153,6 +155,12 @@ public class UltimateSprint extends Module {
     private void onTick(TickEvent.Pre event) {
         if (!isActive() || mc.player == null || mc.world == null)
             return;
+
+        // 如果FreeCam激活，直接返回
+        Freecam freecam = Modules.get().get(Freecam.class);
+        if (freecam != null && freecam.isActive()) {
+            return;
+        }
 
 
         boolean isPressR = Input.isKeyPressed(GLFW.GLFW_KEY_R);
@@ -302,10 +310,9 @@ public class UltimateSprint extends Module {
     private void startSprinting() {
         mc.options.forwardKey.setPressed(true);
         if (skipSprintSetting) {
-            System.out.println("Skipping sprint setting");
             return;
         }
-        if (!mc.player.isSprinting()) {
+        if (!mc.player.isSprinting() && mc.player.isOnGround()) {
             KeyBindingAccessor accessor = (KeyBindingAccessor) mc.options.sprintKey;
             accessor.meteor$setTimesPressed(accessor.meteor$getTimesPressed() + 1);
         }
